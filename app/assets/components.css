@@ -67,6 +67,9 @@
 .btn-secondary { background: transparent; border: 1px solid var(--color-border); color: var(--color-text-primary); }
 .btn-danger { background: var(--color-danger); color: #fff; }
 .btn-text { background: none; border: none; color: var(--color-primary-700); padding: 0; }
+.btn[disabled] { cursor: default; pointer-events: none; }
+.btn-primary[disabled], .btn-danger[disabled] { background: var(--color-bg-muted); color: var(--color-text-disabled); }
+.btn-secondary[disabled] { color: var(--color-text-disabled); border-color: var(--color-border); }
 /* Responsive (DESIGN.md §3.1): บน mobile (< 768px) ปุ่ม Primary/Danger ที่เป็น action หลักของหน้าจอขยายเต็มความกว้าง
    ปุ่ม Secondary/Text คงขนาดตามเนื้อหาปกติทุก breakpoint — ดู media query ท้ายไฟล์สำหรับ >= 768px ที่คืนค่าเป็นปกติ */
 .btn-primary, .btn-danger { display: block; width: 100%; text-align: center; }
@@ -87,7 +90,7 @@
   font-family: var(--font-family-thai); background: var(--color-bg-surface); color: var(--color-text-primary);
 }
 .form-field select:focus { outline: none; border: 2px solid var(--color-primary-600); }
-.form-field .field-error { color: var(--color-danger); font-size: var(--font-size-small); margin-top: var(--space-1); }
+.field-error { color: var(--color-danger); font-size: var(--font-size-small); margin-top: var(--space-1); }
 .form-field .field-help { color: var(--color-text-secondary); font-size: var(--font-size-small); margin-top: var(--space-1); }
 
 /* Multi-column form grid (DESIGN.md §3.2) — ฐาน (mobile/tablet, < 1024px): ยุบเหลือ 1 คอลัมน์เต็มความกว้างเสมอ
