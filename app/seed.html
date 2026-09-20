@@ -17,7 +17,7 @@
 <body>
 <div class="content" style="max-width:640px;margin:0 auto;">
   <h1>Seed ข้อมูลตัวอย่างลง Firestore</h1>
-  <p class="text-secondary">สร้างหน่วยงาน 2 แห่ง + รายการยาตัวอย่าง + เกณฑ์ safety stock ของเดือนปัจจุบัน + คำขอเบิกตัวอย่างหลายสถานะ (พร้อมรายการยาสำหรับคำขอที่รออนุมัติระดับ 1) + บัญชีทดสอบ (Firebase Auth จริง) เจ้าหน้าที่ รพ.สต. 2 คน และเภสัชกร 2 คน เพื่อทดสอบ <code>staff-hph/requisition-list.html</code>, <code>staff-hph/requisition-new.html</code> และ <code>pharmacist/approval-queue-level1.html</code>/<code>approval-review-level1.html</code> เท่านั้น ไม่ใช่ข้อมูลจริง</p>
+  <p class="text-secondary">สร้างหน่วยงาน 2 แห่ง + รายการยาตัวอย่าง + เกณฑ์ safety stock ของเดือนปัจจุบัน + ค่าตั้งค่าระบบเริ่มต้น (ai-trigger-threshold-percent) + คำขอเบิกตัวอย่างหลายสถานะ (พร้อมรายการยาสำหรับคำขอที่รออนุมัติระดับ 1 และคำขอที่ "จ่ายแล้ว" สำหรับทดสอบยืนยันรับยา) + บัญชีทดสอบ (Firebase Auth จริง) เจ้าหน้าที่ รพ.สต. 2 คน เภสัชกร 2 คน และแอดมิน 1 คน เพื่อทดสอบ <code>staff-hph/*</code>, <code>pharmacist/*</code> และ <code>admin/*</code> ทั้งหมด ไม่ใช่ข้อมูลจริง</p>
   <button class="btn btn-primary" id="seed-btn" style="width:auto;">Seed ข้อมูลตัวอย่าง</button>
   <pre id="log" style="white-space:pre-wrap;background:var(--color-bg-muted);padding:var(--space-4);border-radius:var(--radius-md);margin-top:var(--space-4);"></pre>
 </div>
@@ -26,6 +26,8 @@
   import {
     getFirestore, doc, setDoc, deleteDoc, collection, addDoc, query, where, getDocs, writeBatch, Timestamp
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  // เพิ่ม 20260920: seed systemConfiguration (ai-trigger-threshold-percent) เพื่อทดสอบ admin/system-settings.html
+  // และบัญชีทดสอบ role admin เพื่อทดสอบ admin/audit-trail.html, user-accounts.html, system-settings.html
   import {
     getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -85,6 +87,10 @@
     { displayName: "ภก. สมชาย ตัวอย่าง", role: "pharmacist", unitId: null, email: "pharmacist-a@smartsync.test" },
     { displayName: "ภญ. สมหญิง ตัวอย่าง", role: "pharmacist", unitId: null, email: "pharmacist-b@smartsync.test" }
   ];
+  // บัญชีทดสอบ role admin (เพิ่ม 20260920) — ทดสอบ admin/audit-trail.html, user-accounts.html, system-settings.html
+  const ADMIN_ACCOUNTS = [
+    { displayName: "แอดมิน ตัวอย่าง", role: "admin", unitId: null, email: "admin-a@smartsync.test" }
+  ];
   // doc id เดิมของเภสัชกรตัวอย่างก่อนต่อ Firebase Auth จริง (BL-024) — ลบทิ้งตอน re-seed กันซ้ำซ้อนกับ doc ใหม่ที่ใช้ uid เป็น id
   const LEGACY_USER_DOC_IDS = ["pharmacist-sample-a", "pharmacist-sample-b"];
 
@@ -138,6 +144,15 @@
       }
       log(`สร้าง/อัปเดตเกณฑ์ safety stock ของเดือน ${yearMonthBE} แล้ว ${thresholdCount} รายการ (ยา D ไม่มีเกณฑ์ตั้งใจ เพื่อทดสอบกรณี "ยังไม่ตั้งเกณฑ์")`);
 
+      // เพิ่ม 20260920: seed ค่าเริ่มต้นของ systemConfiguration (FT-034) — เกณฑ์ trigger % ผู้ช่วย AI ที่เดิม hardcode ในโค้ด
+      await setDoc(doc(db, "systemConfiguration", "ai-trigger-threshold-percent"), {
+        currentValue: "25",
+        description: "เปอร์เซ็นต์ความเบี่ยงเบน (ยอดขอเบิก vs ยอดแนะนำ) ที่ trigger การเน้นปุ่มผู้ช่วย AI สำหรับเภสัชกรผู้อนุมัติระดับ 1 (ขอบเขตปรับได้ 5-100%)",
+        lastUpdatedBy: null,
+        lastUpdatedAt: null
+      });
+      log(`สร้าง/อัปเดตค่าตั้งค่าระบบ "ai-trigger-threshold-percent" (ค่าเริ่มต้น 25) แล้ว`);
+
       // lineItems ตัวอย่าง เฉพาะคำขอสถานะ pending_level1 (ใช้ทดสอบ pharmacist/approval-review-level1.html)
       // suggestedQuantity คำนวณจาก THRESHOLDS ด้านบนให้สมเหตุสมผล (max(เกณฑ์ - ยอดคงเหลือ, 0)) — ยา D ไม่มีเกณฑ์ตั้งใจ (suggested=0)
       const samples = [
@@ -151,7 +166,15 @@
         },
         { unitId: "hph-sample-a", type: "normal", status: "pending_level2", daysAgo: 30, confirmed: true },
         { unitId: "hph-sample-a", type: "normal", status: "ready_to_export", daysAgo: 60, confirmed: true },
-        { unitId: "hph-sample-a", type: "normal", status: "dispensed", daysAgo: 90, confirmed: true },
+        {
+          // เพิ่ม lineItems พร้อม approvedQuantity (เพิ่ม 20260920) เพื่อทดสอบ requisition-detail.html/goods-receipt-confirm.html
+          // (จำลองสถานะหลังผ่านอนุมัติ 2 ระดับแล้ว — โค้ดจริงยังไม่มีหน้าอนุมัติระดับ 2 จึงตั้งค่าตรงๆ ผ่าน seed แทน)
+          unitId: "hph-sample-a", type: "normal", status: "dispensed", daysAgo: 90, confirmed: true,
+          lineItems: [
+            { drugItemId: "drug-sample-a", suggestedQuantity: 70, selfReportedBalance: 80, approvedQuantity: 70 },
+            { drugItemId: "drug-sample-c", suggestedQuantity: 90, selfReportedBalance: 0, approvedQuantity: 85 }
+          ]
+        },
         {
           unitId: "hph-sample-a", type: "emergency", status: "pending_level1", daysAgo: 5, confirmed: true,
           lineItems: [
@@ -198,7 +221,9 @@
               suggestedQuantity: li.suggestedQuantity,
               selfReportedBalance: li.selfReportedBalance,
               pharmacistConfirmedBalance: null,
-              approvedQuantity: null
+              // approvedQuantity เพิ่ม 20260920: ปล่อย null ตามเดิมถ้าไม่ได้ระบุ (คำขอที่ยังไม่ผ่านอนุมัติระดับ 1)
+              // มีค่าจริงเฉพาะ sample ที่จำลองสถานะหลังผ่านอนุมัติแล้ว (เช่น "dispensed" ด้านบน)
+              approvedQuantity: li.approvedQuantity ?? null
             });
           });
           await batch.commit();
@@ -211,7 +236,7 @@
       }
       log(`ลบ users doc รุ่นเก่า (ก่อนมี Firebase Auth จริง) ${LEGACY_USER_DOC_IDS.length} รายการแล้ว (ถ้ามี)`);
 
-      for (const acct of [...STAFF_ACCOUNTS, ...PHARMACIST_ACCOUNTS]) {
+      for (const acct of [...STAFF_ACCOUNTS, ...PHARMACIST_ACCOUNTS, ...ADMIN_ACCOUNTS]) {
         const { uid, created } = await createOrGetAuthUid(acct.email, SEED_PASSWORD);
         await setDoc(doc(db, "users", uid), {
           displayName: acct.displayName, role: acct.role, unitId: acct.unitId,
@@ -225,6 +250,7 @@
       log(`\nรหัสผ่านทดสอบของทุกบัญชีข้างต้น (dev เท่านั้น ไม่ใช่รหัสจริง): ${SEED_PASSWORD}`);
       log("\nเสร็จแล้ว — เปิด staff-hph/requisition-list.html หรือ requisition-new.html แล้ว login ด้วยบัญชี staff-hph-a@smartsync.test หรือ staff-hph-b@smartsync.test");
       log("เปิด pharmacist/approval-queue-level1.html แล้ว login ด้วยบัญชี pharmacist-a@smartsync.test หรือ pharmacist-b@smartsync.test");
+      log("เปิด admin/audit-trail.html แล้ว login ด้วยบัญชี admin-a@smartsync.test — คำขอ hph-sample-a สถานะ \"จ่ายแล้ว\" ใช้ทดสอบ staff-hph/goods-receipt-confirm.html ได้ (login เป็น staff-hph-a)");
     } catch (err) {
       log("เกิดข้อผิดพลาด: " + err.message);
       console.error(err);

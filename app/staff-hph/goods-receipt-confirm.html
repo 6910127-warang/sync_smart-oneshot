@@ -1,0 +1,296 @@
+<!--
+  Role: เจ้าหน้าที่ รพ.สต. (staff-hph)
+  หน้า: ยืนยันรับยา — เขียน goodsReceiptRecords จริง (เพิ่ม 20260920, README.md "ขั้นต่อไป" ข้อ 7)
+  อ้างอิง: data-model.md §3.10 (Goods Receipt Record), ACL.md แถวเจ้าหน้าที่ รพ.สต. ("บันทึกยืนยันการรับยาเข้าคลังของหน่วยตนเอง")
+  เข้าถึงได้เฉพาะคำขอสถานะ "dispensed" ของหน่วยตัวเองที่ยังไม่เคยยืนยันรับยา (เชื่อมจากปุ่ม "ยืนยันรับยา" ใน requisition-list.html)
+  เขียนเป็น writeBatch เดียว 1 เอกสารต่อรายการยา โดยใช้ deterministic doc id "{requisitionId}_{drugItemId}"
+  เพื่อให้ Firestore ตีความเป็น "create" เท่านั้น (กันยืนยันซ้ำ — firestore.rules ปิด update ของ collection นี้ไว้แล้ว)
+  ไม่แก้สถานะ/recordVersion ของคำขอแม่ (ดูหมายเหตุ "รับแล้ว" ใน README.md — คำนวณจากการมี goodsReceiptRecords แทน enum ใหม่)
+  ดูโครงสร้าง collection/field ทั้งหมดที่ ../README.md
+-->
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ยืนยันรับยา — SmartSync</title>
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .state-row td { text-align: center !important; color: var(--color-text-secondary); padding: var(--space-6) !important; display: table-cell !important; }
+  .topbar-right { display: flex; align-items: center; gap: var(--space-3); }
+  #loading-view { max-width: 480px; margin: var(--space-8) auto; }
+  #loading-view.hidden, #notice-view.hidden, #confirm-view.hidden, #success-view.hidden { display: none; }
+  #notice-view, #success-view { display: none; }
+  .back-link { display: inline-block; margin-bottom: var(--space-4); }
+  .data-table td.num input.numeric { width: 110px; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">SmartSync</div>
+    <a class="nav-item" href="requisition-new.html">สร้างคำขอเบิกยา</a>
+    <a class="nav-item active" href="requisition-list.html">รายการคำขอเบิก</a>
+  </aside>
+  <div class="drawer-scrim" onclick="closeDrawer()"></div>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger-btn" aria-label="เปิดเมนู" onclick="toggleDrawer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+        <span id="topbar-unit-name">หน่วยงาน: —</span>
+      </div>
+      <div class="topbar-right">
+        <span>บทบาท: เจ้าหน้าที่ รพ.สต. (ข้อมูลจริงจาก Firestore)</span>
+        <button class="btn-text" id="sign-out-btn" type="button" style="display:none;">ออกจากระบบ</button>
+      </div>
+    </div>
+    <div class="content">
+
+      <div id="loading-view" class="card">
+        <p class="text-secondary">กำลังตรวจสอบสิทธิ์การใช้งาน…</p>
+      </div>
+
+      <div id="notice-view" class="card">
+        <p id="notice-message"></p>
+        <p style="margin-top: var(--space-4);"><a class="btn btn-secondary" href="requisition-list.html" style="width:auto;">กลับไปรายการคำขอเบิก</a></p>
+      </div>
+
+      <div id="confirm-view" class="hidden">
+        <a class="back-link btn-text" href="requisition-list.html">← กลับไปรายการคำขอเบิก</a>
+        <h1 id="page-title">ยืนยันรับยา</h1>
+        <p class="text-secondary" id="page-subtitle"></p>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>รายการยา</th>
+              <th class="num">จำนวนที่อนุมัติ</th>
+              <th class="num">จำนวนที่รับจริง</th>
+            </tr>
+          </thead>
+          <tbody id="line-item-rows">
+            <tr class="state-row"><td colspan="3">กำลังโหลดข้อมูล…</td></tr>
+          </tbody>
+        </table>
+
+        <p style="margin-top: var(--space-8);">
+          <button class="btn btn-primary" id="confirm-btn" type="button" style="width:auto;" disabled>ยืนยันรับยา</button>
+        </p>
+      </div>
+
+      <div id="success-view" class="card" style="max-width: 560px;">
+        <h1>บันทึกการรับยาสำเร็จ</h1>
+        <p class="text-secondary">คำขอนี้จะแสดงสถานะ "รับแล้ว" ในหน้ารายการคำขอเบิก</p>
+        <p style="margin-top: var(--space-6);"><a class="btn btn-primary" href="requisition-list.html">ไปที่รายการคำขอเบิก</a></p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="confirm-modal" style="display:none;">
+  <div class="modal">
+    <h2>ยืนยันรับยา?</h2>
+    <p id="confirm-modal-text"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="cancel-confirm-btn" type="button">ยกเลิก</button>
+      <button class="btn btn-primary" id="submit-confirm-btn" type="button">ยืนยันรับยา</button>
+    </div>
+  </div>
+</div>
+
+<script src="../assets/nav.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getFirestore, doc, getDoc, collection, query, where, getDocs, writeBatch
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { firebaseConfig } from "../firebase-config.js";
+  import { getAuthForApp, signOutUser, watchAuth } from "../lib/auth.js";
+  import { logAuditEvent } from "../lib/audit-log.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuthForApp(app);
+
+  const loadingView = document.getElementById("loading-view");
+  const noticeView = document.getElementById("notice-view");
+  const noticeMessage = document.getElementById("notice-message");
+  const confirmView = document.getElementById("confirm-view");
+  const successView = document.getElementById("success-view");
+  const signOutBtn = document.getElementById("sign-out-btn");
+  const topbarUnitName = document.getElementById("topbar-unit-name");
+  const rowsBody = document.getElementById("line-item-rows");
+  const confirmBtn = document.getElementById("confirm-btn");
+  const modal = document.getElementById("confirm-modal");
+
+  const requisitionId = new URLSearchParams(location.search).get("id");
+  let currentProfile = null;
+  let requisitionCode = requisitionId;
+
+  function withTimeout(promise, ms, timeoutMessage) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), ms))
+    ]);
+  }
+
+  function redirectToLogin() {
+    location.replace("../login.html");
+  }
+
+  function showNotice(message) {
+    loadingView.classList.add("hidden");
+    confirmView.classList.add("hidden");
+    noticeMessage.textContent = message;
+    noticeView.style.display = "block";
+  }
+
+  function checkValid() {
+    const inputs = rowsBody.querySelectorAll(".received-qty-input");
+    if (inputs.length === 0) { confirmBtn.disabled = true; return; }
+    let allValid = true;
+    inputs.forEach((input) => {
+      const val = parseInt(input.value, 10);
+      const errorEl = input.closest("td").querySelector(".field-error");
+      const invalid = input.value.trim() === "" || !Number.isFinite(val) || val < 0;
+      if (errorEl) errorEl.style.display = invalid ? "block" : "none";
+      if (invalid) allValid = false;
+    });
+    confirmBtn.disabled = !allValid;
+  }
+
+  async function loadRequisition(profile) {
+    currentProfile = profile;
+    let unitName = profile.unitId;
+    try {
+      const unitDoc = await getDoc(doc(db, "units", profile.unitId));
+      if (unitDoc.exists()) unitName = unitDoc.data().name;
+    } catch (err) {
+      console.error("load unit name failed:", err);
+    }
+    topbarUnitName.textContent = `หน่วยงาน: ${unitName}`;
+    signOutBtn.style.display = "";
+
+    if (!requisitionId) { showNotice("ไม่พบคำขอที่ต้องการ — กรุณาเลือกจากรายการ"); return; }
+
+    try {
+      const reqRef = doc(db, "requisitions", requisitionId);
+      const reqSnap = await withTimeout(getDoc(reqRef), 10000, "เชื่อมต่อ Firestore ไม่ได้ภายใน 10 วินาที");
+      if (!reqSnap.exists()) { showNotice("ไม่พบคำขอนี้ (อาจถูกลบไปแล้ว)"); return; }
+      const req = reqSnap.data();
+      if (req.unitId !== profile.unitId) { showNotice("คำขอนี้ไม่ใช่ของหน่วยงานท่าน"); return; }
+      if (req.status !== "dispensed") { showNotice('ยืนยันรับยาได้เฉพาะคำขอที่สถานะ "จ่ายแล้ว" เท่านั้น'); return; }
+
+      const existingReceiptSnap = await getDocs(query(
+        collection(db, "goodsReceiptRecords"),
+        where("requisitionId", "==", requisitionId),
+        where("receivingUnitId", "==", profile.unitId)
+      ));
+      if (!existingReceiptSnap.empty) { showNotice("คำขอนี้ยืนยันรับยาไปแล้ว"); return; }
+
+      requisitionCode = req.requisitionCode || requisitionId;
+      document.getElementById("page-title").textContent = `ยืนยันรับยา ${requisitionCode}`;
+      document.getElementById("page-subtitle").textContent = `กรอกจำนวนที่รับจริงต่อรายการยา (ค่าเริ่มต้น = จำนวนที่อนุมัติ) แล้วกดยืนยัน`;
+
+      const [lineSnap, drugSnap] = await Promise.all([
+        getDocs(collection(reqRef, "lineItems")),
+        getDocs(query(collection(db, "drugItems"), where("active", "==", true)))
+      ]);
+      const drugNameMap = new Map(drugSnap.docs.map((d) => [d.id, d.data().name]));
+
+      if (lineSnap.empty) {
+        rowsBody.innerHTML = `<tr class="state-row"><td colspan="3">คำขอนี้ไม่มีรายการยาให้ยืนยันรับ</td></tr>`;
+        confirmBtn.disabled = true;
+      } else {
+        rowsBody.innerHTML = lineSnap.docs.map((d) => {
+          const li = d.data();
+          const approvedQuantity = li.approvedQuantity ?? 0;
+          return `
+            <tr data-line-item-id="${d.id}" data-drug-item-id="${li.drugItemId}">
+              <td data-label="รายการยา">${drugNameMap.get(li.drugItemId) || li.drugItemId}</td>
+              <td data-label="จำนวนที่อนุมัติ" class="num">${approvedQuantity}</td>
+              <td data-label="จำนวนที่รับจริง" class="num">
+                <input type="text" inputmode="numeric" class="numeric received-qty-input" value="${approvedQuantity}">
+                <div class="field-error" style="display:none;">กรอกจำนวนที่รับจริงเป็นจำนวนเต็มไม่ติดลบ</div>
+              </td>
+            </tr>`;
+        }).join("");
+        rowsBody.querySelectorAll(".received-qty-input").forEach((input) => input.addEventListener("input", checkValid));
+        checkValid();
+      }
+
+      loadingView.classList.add("hidden");
+      confirmView.classList.remove("hidden");
+    } catch (err) {
+      showNotice(`โหลดข้อมูลไม่สำเร็จ: ${err.message} (ดู console)`);
+      console.error("loadRequisition failed:", err);
+    }
+  }
+
+  confirmBtn.addEventListener("click", () => {
+    const rowCount = rowsBody.querySelectorAll("tr[data-drug-item-id]").length;
+    document.getElementById("confirm-modal-text").textContent =
+      `ท่านกำลังจะยืนยันรับยาคำขอ ${requisitionCode} จำนวน ${rowCount} รายการยา — บันทึกแล้วแก้ไขไม่ได้`;
+    modal.style.display = "flex";
+  });
+  document.getElementById("cancel-confirm-btn").addEventListener("click", () => { modal.style.display = "none"; });
+
+  document.getElementById("submit-confirm-btn").addEventListener("click", async () => {
+    const submitBtn = document.getElementById("submit-confirm-btn");
+    submitBtn.disabled = true;
+    try {
+      const rows = Array.from(rowsBody.querySelectorAll("tr[data-drug-item-id]"));
+      const batch = writeBatch(db);
+      rows.forEach((row) => {
+        const drugItemId = row.dataset.drugItemId;
+        const receivedQuantity = parseInt(row.querySelector(".received-qty-input").value, 10);
+        const receiptRef = doc(db, "goodsReceiptRecords", `${requisitionId}_${drugItemId}`);
+        batch.set(receiptRef, {
+          requisitionId,
+          drugItemId,
+          receivingUnitId: currentProfile.unitId,
+          receivedQuantity,
+          confirmedBy: currentProfile.uid,
+          confirmedAt: new Date()
+        });
+      });
+      await batch.commit();
+
+      logAuditEvent(db, {
+        actorId: currentProfile.uid,
+        eventType: "confirm_receipt",
+        relatedEntityId: requisitionId,
+        eventDetail: `ยืนยันรับยาคำขอ ${requisitionCode} (${rows.length} รายการยา)`
+      });
+
+      modal.style.display = "none";
+      confirmView.classList.add("hidden");
+      successView.style.display = "block";
+    } catch (err) {
+      modal.style.display = "none";
+      alert("ยืนยันรับยาไม่สำเร็จ: " + err.message);
+      console.error("confirm receipt failed:", err);
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  signOutBtn.addEventListener("click", () => {
+    if (!confirm("ออกจากระบบ?")) return;
+    signOutUser(auth);
+  });
+
+  watchAuth(auth, db, "staff_hph", {
+    onSignedIn: (profile) => {
+      if (!profile.unitId) { redirectToLogin(); return; }
+      loadRequisition(profile);
+    },
+    onSignedOut: redirectToLogin,
+    onWrongRole: redirectToLogin
+  });
+</script>
+</body>
+</html>

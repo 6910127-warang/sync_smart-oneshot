@@ -192,18 +192,23 @@
         const req = doc.data();
         const typeLabel = TYPE_LABEL[req.type] || { text: req.type, badge: "" };
         let statusLabel = STATUS_LABEL[req.status] || { text: req.status, badge: "" };
-        if (req.status === "dispensed" && await hasReceipt(doc.id, unitId)) {
-          statusLabel = RECEIVED_LABEL;
+        let showReceiptAction = false;
+        if (req.status === "dispensed") {
+          if (await hasReceipt(doc.id, unitId)) statusLabel = RECEIVED_LABEL;
+          else showReceiptAction = true;
         }
         // วันที่ยื่นคำขอ = confirmedByStaffAt (วันที่เจ้าหน้าที่กดยืนยันคำขอ ตาม FR-1.1a) — ใช้ createdAt แทนถ้ายังไม่ยืนยัน
         const submittedAt = req.confirmedByStaffAt || req.createdAt;
+        const receiptAction = showReceiptAction
+          ? ` · <a class="btn-text" href="goods-receipt-confirm.html?id=${encodeURIComponent(doc.id)}">ยืนยันรับยา</a>`
+          : "";
         return `
           <tr>
             <td data-label="รหัสคำขอ">${req.requisitionCode || doc.id}</td>
             <td data-label="ประเภท">${badgeSpan(typeLabel)}</td>
             <td data-label="วันที่ยื่นคำขอ">${formatThaiDate(submittedAt)}</td>
             <td data-label="สถานะ">${badgeSpan(statusLabel)}</td>
-            <td data-label="การดำเนินการ"><span class="btn-text" disabled title="หน้ารายละเอียดยังไม่เชื่อมข้อมูลจริง">ดูรายละเอียด</span></td>
+            <td data-label="การดำเนินการ"><a class="btn-text" href="requisition-detail.html?id=${encodeURIComponent(doc.id)}">ดูรายละเอียด</a>${receiptAction}</td>
           </tr>`;
       }));
       rowsBody.innerHTML = rows.join("");

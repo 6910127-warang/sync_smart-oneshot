@@ -1,0 +1,205 @@
+<!--
+  Role: ผู้ดูแลระบบ (admin)
+  หน้า: Audit Trail ทางธุรกิจ (BL-008) — เพิ่ม 20260920 (README.md "ขั้นต่อไป" ข้อ 6)
+  อ่านอย่างเดียว collection businessAuditLog (firestore.rules: get/list เฉพาะ admin เท่านั้น, immutable)
+  ขอบเขตปัจจุบัน: มีเฉพาะ event ที่หน้าจอจริงเขียนอยู่แล้ว — สร้างคำขอ/อนุมัติ-ปฏิเสธระดับ 1/ยืนยันรับยา
+  (event อื่นตาม data-model.md §3.14 เช่น จ่ายผ่านระดับ 2, ขอปรึกษา, แก้ไขฉุกเฉิน ยังไม่มีโค้ดจริงจึงยังไม่ปรากฏที่นี่)
+  ดูโครงสร้าง collection/field ทั้งหมดที่ ../README.md
+-->
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audit Trail — SmartSync</title>
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .state-row td { text-align: center !important; color: var(--color-text-secondary); padding: var(--space-6) !important; display: table-cell !important; }
+  .topbar-right { display: flex; align-items: center; gap: var(--space-3); }
+  #loading-view { max-width: 480px; margin: var(--space-8) auto; }
+  #loading-view.hidden, #main-view.hidden { display: none; }
+  .filter-bar { display: flex; gap: var(--space-3); align-items: center; margin-bottom: var(--space-4); flex-wrap: wrap; }
+  .filter-bar select { width: auto; height: 40px; padding: 0 var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-family: var(--font-family-thai); }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">SmartSync</div>
+    <a class="nav-item active" href="audit-trail.html">Audit Trail</a>
+    <a class="nav-item" href="user-accounts.html">จัดการบัญชีผู้ใช้</a>
+    <a class="nav-item" href="system-settings.html">ตั้งค่าระบบ</a>
+  </aside>
+  <div class="drawer-scrim" onclick="closeDrawer()"></div>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger-btn" aria-label="เปิดเมนู" onclick="toggleDrawer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+        <span id="topbar-name">แอดมิน: —</span>
+      </div>
+      <div class="topbar-right">
+        <span>บทบาท: ผู้ดูแลระบบ (ข้อมูลจริงจาก Firestore)</span>
+        <button class="btn-text" id="sign-out-btn" type="button" style="display:none;">ออกจากระบบ</button>
+      </div>
+    </div>
+    <div class="content">
+
+      <div id="loading-view" class="card">
+        <p class="text-secondary">กำลังตรวจสอบสิทธิ์การใช้งาน…</p>
+      </div>
+
+      <div id="main-view" class="hidden">
+        <h1>Audit Trail ทางธุรกิจ</h1>
+        <p class="text-secondary">บันทึกเหตุการณ์ทางธุรกิจแบบแก้ไข/ลบไม่ได้ (BL-008) — แสดง 100 รายการล่าสุด</p>
+
+        <div class="filter-bar">
+          <button class="btn btn-secondary" id="refresh-btn" type="button" style="width:auto;">รีเฟรช</button>
+          <select id="event-type-filter">
+            <option value="">ทุกประเภทเหตุการณ์</option>
+            <option value="create_requisition">สร้างคำขอเบิก</option>
+            <option value="approve_level1">อนุมัติระดับ 1</option>
+            <option value="reject_level1">ปฏิเสธระดับ 1</option>
+            <option value="confirm_receipt">ยืนยันรับยา</option>
+          </select>
+        </div>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>วันที่-เวลา</th>
+              <th>ประเภทเหตุการณ์</th>
+              <th>ผู้กระทำ</th>
+              <th>คำขอที่เกี่ยวข้อง</th>
+              <th>รายละเอียด</th>
+            </tr>
+          </thead>
+          <tbody id="log-rows">
+            <tr class="state-row"><td colspan="5">กำลังโหลดข้อมูล…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="../assets/nav.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getFirestore, doc, getDoc, collection, query, orderBy, limit, getDocs
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { firebaseConfig } from "../firebase-config.js";
+  import { getAuthForApp, signOutUser, watchAuth } from "../lib/auth.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuthForApp(app);
+
+  const EVENT_TYPE_LABEL = {
+    create_requisition: "สร้างคำขอเบิก",
+    approve_level1: "อนุมัติระดับ 1",
+    reject_level1: "ปฏิเสธระดับ 1",
+    confirm_receipt: "ยืนยันรับยา"
+  };
+
+  const loadingView = document.getElementById("loading-view");
+  const mainView = document.getElementById("main-view");
+  const signOutBtn = document.getElementById("sign-out-btn");
+  const topbarName = document.getElementById("topbar-name");
+  const rowsBody = document.getElementById("log-rows");
+  const refreshBtn = document.getElementById("refresh-btn");
+  const eventTypeFilter = document.getElementById("event-type-filter");
+
+  const userNameCache = new Map(); // uid -> displayName — admin เท่านั้นที่อ่าน users/{uid} คนอื่นได้ตาม firestore.rules
+
+  function withTimeout(promise, ms, timeoutMessage) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), ms))
+    ]);
+  }
+
+  function formatThaiDateTime(timestamp) {
+    if (!timestamp) return "—";
+    const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear() + 543;
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+  }
+
+  async function actorName(uid) {
+    if (userNameCache.has(uid)) return userNameCache.get(uid);
+    try {
+      const snap = await getDoc(doc(db, "users", uid));
+      const name = snap.exists() ? snap.data().displayName : uid;
+      userNameCache.set(uid, name);
+      return name;
+    } catch (err) {
+      console.error(`โหลดชื่อผู้ใช้ ${uid} ไม่สำเร็จ:`, err);
+      return uid;
+    }
+  }
+
+  function redirectToLogin() {
+    location.replace("../login.html");
+  }
+
+  function renderState(message) {
+    rowsBody.innerHTML = `<tr class="state-row"><td colspan="5">${message}</td></tr>`;
+  }
+
+  async function loadLog() {
+    renderState("กำลังโหลดข้อมูล…");
+    try {
+      const q = query(collection(db, "businessAuditLog"), orderBy("occurredAt", "desc"), limit(100));
+      const snap = await withTimeout(getDocs(q), 10000, "เชื่อมต่อ Firestore ไม่ได้ภายใน 10 วินาที");
+      let entries = snap.docs.map((d) => d.data());
+      const filterVal = eventTypeFilter.value;
+      if (filterVal) entries = entries.filter((e) => e.eventType === filterVal);
+
+      if (entries.length === 0) {
+        renderState("ไม่มีรายการที่ตรงเงื่อนไข");
+        return;
+      }
+
+      const rows = await Promise.all(entries.map(async (entry) => `
+        <tr>
+          <td data-label="วันที่-เวลา">${formatThaiDateTime(entry.occurredAt)}</td>
+          <td data-label="ประเภทเหตุการณ์">${EVENT_TYPE_LABEL[entry.eventType] || entry.eventType}</td>
+          <td data-label="ผู้กระทำ">${await actorName(entry.actorId)}</td>
+          <td data-label="คำขอที่เกี่ยวข้อง">${entry.relatedEntityId}</td>
+          <td data-label="รายละเอียด">${entry.eventDetail}</td>
+        </tr>`));
+      rowsBody.innerHTML = rows.join("");
+    } catch (err) {
+      renderState(`โหลดข้อมูลไม่สำเร็จ: ${err.message} (ดู console)`);
+      console.error("loadLog failed:", err);
+    }
+  }
+
+  signOutBtn.addEventListener("click", () => {
+    if (!confirm("ออกจากระบบ?")) return;
+    signOutUser(auth);
+  });
+  refreshBtn.addEventListener("click", loadLog);
+  eventTypeFilter.addEventListener("change", loadLog);
+
+  watchAuth(auth, db, "admin", {
+    onSignedIn: (profile) => {
+      loadingView.classList.add("hidden");
+      mainView.classList.remove("hidden");
+      signOutBtn.style.display = "";
+      topbarName.textContent = `แอดมิน: ${profile.displayName}`;
+      loadLog();
+    },
+    onSignedOut: redirectToLogin,
+    onWrongRole: redirectToLogin
+  });
+</script>
+</body>
+</html>

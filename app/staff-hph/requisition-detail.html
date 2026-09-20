@@ -1,0 +1,312 @@
+<!--
+  Role: เจ้าหน้าที่ รพ.สต. (staff-hph)
+  หน้า: รายละเอียดคำขอเบิก — เชื่อม lineItems/approvalRecords subcollection จริง แทนลิงก์ที่เคยปิดใช้งานไว้ใน requisition-list.html
+  เพิ่ม 20260920 (ขั้นต่อไปข้อ 1 ใน README.md) — ไม่ต้องแก้ firestore.rules เพิ่ม เพราะ staff_hph อ่าน lineItems/approvalRecords
+  ของคำขอหน่วยตัวเองได้อยู่แล้วผ่าน canAccessRequisition() (ดู ../../firestore.rules)
+  หมายเหตุ: ไม่แสดงชื่อเภสัชกรผู้อนุมัติ (เฉพาะผลการพิจารณา/เหตุผล/วันที่) เพราะ staff_hph อ่าน users/{uid} ของคนอื่นไม่ได้ตาม
+  firestore.rules ("users": get เฉพาะ doc ตัวเองหรือ admin) — ไม่ใช่ข้อมูลที่หน้าจอนี้ต้องรู้ตาม ACL.md
+  ดูโครงสร้าง collection/field ทั้งหมดที่ ../README.md
+-->
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>รายละเอียดคำขอเบิก — SmartSync</title>
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .state-row td { text-align: center !important; color: var(--color-text-secondary); padding: var(--space-6) !important; display: table-cell !important; }
+  .topbar-right { display: flex; align-items: center; gap: var(--space-3); }
+  #loading-view { max-width: 480px; margin: var(--space-8) auto; }
+  #loading-view.hidden, #notice-view.hidden, #detail-view.hidden { display: none; }
+  #notice-view { display: none; }
+  .back-link { display: inline-block; margin-bottom: var(--space-4); }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3) var(--space-6); margin-bottom: var(--space-6); }
+  .meta-grid dt { color: var(--color-text-secondary); font-size: var(--font-size-small); }
+  .meta-grid dd { margin: 0 0 var(--space-3) 0; }
+  h2 { margin-top: var(--space-8); }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">SmartSync</div>
+    <a class="nav-item" href="requisition-new.html">สร้างคำขอเบิกยา</a>
+    <a class="nav-item active" href="requisition-list.html">รายการคำขอเบิก</a>
+  </aside>
+  <div class="drawer-scrim" onclick="closeDrawer()"></div>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger-btn" aria-label="เปิดเมนู" onclick="toggleDrawer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+        <span id="topbar-unit-name">หน่วยงาน: —</span>
+      </div>
+      <div class="topbar-right">
+        <span>บทบาท: เจ้าหน้าที่ รพ.สต. (ข้อมูลจริงจาก Firestore)</span>
+        <button class="btn-text" id="sign-out-btn" type="button" style="display:none;">ออกจากระบบ</button>
+      </div>
+    </div>
+    <div class="content">
+
+      <div id="loading-view" class="card">
+        <p class="text-secondary">กำลังตรวจสอบสิทธิ์การใช้งาน…</p>
+      </div>
+
+      <div id="notice-view" class="card">
+        <p id="notice-message"></p>
+        <p style="margin-top: var(--space-4);"><a class="btn btn-secondary" href="requisition-list.html" style="width:auto;">กลับไปรายการคำขอเบิก</a></p>
+      </div>
+
+      <div id="detail-view" class="hidden">
+        <a class="back-link btn-text" href="requisition-list.html">← กลับไปรายการคำขอเบิก</a>
+        <h1 id="page-title">รายละเอียดคำขอเบิก</h1>
+
+        <dl class="meta-grid">
+          <dt>สถานะ</dt><dd id="meta-status">—</dd>
+          <dt>ประเภท</dt><dd id="meta-type">—</dd>
+          <dt>รอบเดือนที่เบิก</dt><dd id="meta-period">—</dd>
+          <dt>วันที่ยื่นคำขอ</dt><dd id="meta-submitted">—</dd>
+        </dl>
+
+        <h2>รายการยา</h2>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>รายการยา</th>
+              <th class="num">ยอดขอเบิก</th>
+              <th class="num">ยอดแนะนำเบิก</th>
+              <th class="num">ยอดคงเหลือที่แจ้ง</th>
+              <th class="num">ยอดคงเหลือที่เภสัชกรยืนยัน</th>
+              <th class="num">จำนวนที่อนุมัติ</th>
+            </tr>
+          </thead>
+          <tbody id="line-item-rows">
+            <tr class="state-row"><td colspan="6">กำลังโหลดข้อมูล…</td></tr>
+          </tbody>
+        </table>
+
+        <div id="approval-section" style="display:none;">
+          <h2>ประวัติการพิจารณา</h2>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ระดับ</th>
+                <th>ผลการพิจารณา</th>
+                <th>เหตุผล</th>
+                <th>วันที่-เวลา</th>
+              </tr>
+            </thead>
+            <tbody id="approval-rows"></tbody>
+          </table>
+        </div>
+
+        <div id="receipt-section" style="display:none;">
+          <h2>การรับยา</h2>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>รายการยา</th>
+                <th class="num">จำนวนที่รับจริง</th>
+                <th>วันที่-เวลาที่รับ</th>
+              </tr>
+            </thead>
+            <tbody id="receipt-rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="../assets/nav.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getFirestore, doc, getDoc, collection, query, where, getDocs
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { firebaseConfig } from "../firebase-config.js";
+  import { getAuthForApp, signOutUser, watchAuth } from "../lib/auth.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuthForApp(app);
+
+  const STATUS_LABEL = {
+    pending_level1: { text: "รอการอนุมัติระดับ 1", badge: "badge-info" },
+    pending_level2: { text: "รอการอนุมัติระดับ 2", badge: "badge-info" },
+    approved: { text: "อนุมัติแล้ว", badge: "" },
+    ready_to_export: { text: "พร้อมส่งออก", badge: "" },
+    dispensed: { text: "จ่ายแล้ว", badge: "badge-success" },
+    rejected: { text: "ปฏิเสธ", badge: "badge-danger" }
+  };
+  const TYPE_LABEL = {
+    normal: { text: "ปกติ", badge: "" },
+    emergency: { text: "ฉุกเฉิน", badge: "badge-danger" }
+  };
+  const DECISION_LABEL = {
+    approved: { text: "อนุมัติ", badge: "badge-success" },
+    rejected: { text: "ปฏิเสธ", badge: "badge-danger" },
+    adjusted: { text: "ปรับยอด", badge: "badge-warning" }
+  };
+
+  const loadingView = document.getElementById("loading-view");
+  const noticeView = document.getElementById("notice-view");
+  const noticeMessage = document.getElementById("notice-message");
+  const detailView = document.getElementById("detail-view");
+  const signOutBtn = document.getElementById("sign-out-btn");
+  const topbarUnitName = document.getElementById("topbar-unit-name");
+
+  const requisitionId = new URLSearchParams(location.search).get("id");
+  let currentUnitId = null;
+
+  function withTimeout(promise, ms, timeoutMessage) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), ms))
+    ]);
+  }
+
+  function formatThaiDateTime(timestamp) {
+    if (!timestamp) return "—";
+    const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear() + 543;
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+  }
+
+  function badgeSpan(label) {
+    const cls = label.badge ? `badge ${label.badge}` : "";
+    return cls ? `<span class="${cls}">${label.text}</span>` : label.text;
+  }
+
+  function redirectToLogin() {
+    location.replace("../login.html");
+  }
+
+  function showNotice(message) {
+    loadingView.classList.add("hidden");
+    detailView.classList.add("hidden");
+    noticeMessage.textContent = message;
+    noticeView.style.display = "block";
+  }
+
+  async function loadDetail(profile) {
+    currentUnitId = profile.unitId;
+    let unitName = profile.unitId;
+    try {
+      const unitDoc = await getDoc(doc(db, "units", profile.unitId));
+      if (unitDoc.exists()) unitName = unitDoc.data().name;
+    } catch (err) {
+      console.error("load unit name failed:", err);
+    }
+    topbarUnitName.textContent = `หน่วยงาน: ${unitName}`;
+    signOutBtn.style.display = "";
+
+    if (!requisitionId) { showNotice("ไม่พบคำขอที่ต้องการ — กรุณาเลือกจากรายการ"); return; }
+
+    try {
+      const reqRef = doc(db, "requisitions", requisitionId);
+      const reqSnap = await withTimeout(getDoc(reqRef), 10000, "เชื่อมต่อ Firestore ไม่ได้ภายใน 10 วินาที");
+      if (!reqSnap.exists()) { showNotice("ไม่พบคำขอนี้ (อาจถูกลบไปแล้ว)"); return; }
+      const req = reqSnap.data();
+      if (req.unitId !== profile.unitId) { showNotice("คำขอนี้ไม่ใช่ของหน่วยงานท่าน"); return; }
+
+      document.getElementById("page-title").textContent = `รายละเอียดคำขอเบิก ${req.requisitionCode || requisitionId}`;
+      const statusLabel = STATUS_LABEL[req.status] || { text: req.status, badge: "" };
+      document.getElementById("meta-status").innerHTML = badgeSpan(statusLabel);
+      document.getElementById("meta-type").innerHTML = badgeSpan(TYPE_LABEL[req.type] || { text: req.type, badge: "" });
+      document.getElementById("meta-period").textContent = req.period || "— (คำขอฉุกเฉิน)";
+      document.getElementById("meta-submitted").textContent = formatThaiDateTime(req.confirmedByStaffAt || req.createdAt);
+
+      const [lineSnap, drugSnap, approvalSnap] = await Promise.all([
+        getDocs(collection(reqRef, "lineItems")),
+        getDocs(query(collection(db, "drugItems"), where("active", "==", true))),
+        getDocs(collection(reqRef, "approvalRecords"))
+      ]);
+      const drugNameMap = new Map(drugSnap.docs.map((d) => [d.id, d.data().name]));
+
+      const rowsBody = document.getElementById("line-item-rows");
+      if (lineSnap.empty) {
+        rowsBody.innerHTML = `<tr class="state-row"><td colspan="6">คำขอนี้ยังไม่มีรายการยา</td></tr>`;
+      } else {
+        rowsBody.innerHTML = lineSnap.docs.map((d) => {
+          const li = d.data();
+          const requested = li.requestedQuantity ?? li.suggestedQuantity;
+          return `
+            <tr>
+              <td data-label="รายการยา">${drugNameMap.get(li.drugItemId) || li.drugItemId}</td>
+              <td data-label="ยอดขอเบิก" class="num">${requested}</td>
+              <td data-label="ยอดแนะนำเบิก" class="num">${li.suggestedQuantity}</td>
+              <td data-label="ยอดคงเหลือที่แจ้ง" class="num">${li.selfReportedBalance}</td>
+              <td data-label="ยอดคงเหลือที่เภสัชกรยืนยัน" class="num">${li.pharmacistConfirmedBalance ?? "—"}</td>
+              <td data-label="จำนวนที่อนุมัติ" class="num">${li.approvedQuantity ?? "—"}</td>
+            </tr>`;
+        }).join("");
+      }
+
+      if (!approvalSnap.empty) {
+        document.getElementById("approval-section").style.display = "block";
+        document.getElementById("approval-rows").innerHTML = approvalSnap.docs
+          .map((d) => d.data())
+          .sort((a, b) => (a.decidedAt?.toMillis?.() || 0) - (b.decidedAt?.toMillis?.() || 0))
+          .map((rec) => {
+            const decisionLabel = DECISION_LABEL[rec.decision] || { text: rec.decision, badge: "" };
+            return `
+              <tr>
+                <td data-label="ระดับ">${rec.level}</td>
+                <td data-label="ผลการพิจารณา">${badgeSpan(decisionLabel)}</td>
+                <td data-label="เหตุผล">${rec.reason || "—"}</td>
+                <td data-label="วันที่-เวลา">${formatThaiDateTime(rec.decidedAt)}</td>
+              </tr>`;
+          }).join("");
+      }
+
+      if (req.status === "dispensed" || req.status === "ready_to_export") {
+        const receiptSnap = await getDocs(query(
+          collection(db, "goodsReceiptRecords"),
+          where("requisitionId", "==", requisitionId),
+          where("receivingUnitId", "==", profile.unitId)
+        ));
+        if (!receiptSnap.empty) {
+          document.getElementById("receipt-section").style.display = "block";
+          document.getElementById("receipt-rows").innerHTML = receiptSnap.docs.map((d) => {
+            const r = d.data();
+            return `
+              <tr>
+                <td data-label="รายการยา">${drugNameMap.get(r.drugItemId) || r.drugItemId}</td>
+                <td data-label="จำนวนที่รับจริง" class="num">${r.receivedQuantity}</td>
+                <td data-label="วันที่-เวลาที่รับ">${formatThaiDateTime(r.confirmedAt)}</td>
+              </tr>`;
+          }).join("");
+        }
+      }
+
+      loadingView.classList.add("hidden");
+      detailView.classList.remove("hidden");
+    } catch (err) {
+      showNotice(`โหลดข้อมูลไม่สำเร็จ: ${err.message} (ดู console)`);
+      console.error("loadDetail failed:", err);
+    }
+  }
+
+  signOutBtn.addEventListener("click", () => {
+    if (!confirm("ออกจากระบบ?")) return;
+    signOutUser(auth);
+  });
+
+  watchAuth(auth, db, "staff_hph", {
+    onSignedIn: (profile) => {
+      if (!profile.unitId) { redirectToLogin(); return; }
+      loadDetail(profile);
+    },
+    onSignedOut: redirectToLogin,
+    onWrongRole: redirectToLogin
+  });
+</script>
+</body>
+</html>

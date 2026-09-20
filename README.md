@@ -1,6 +1,7 @@
 # SmartSync
 
 **เว็บออนไลน์:** [https://sync-smart.thiphbuymepharmacy.workers.dev](https://sync-smart.thiphbuymepharmacy.workers.dev)
+**ผลการทดสอบล่าสุด:** [test-results.md](test-results.md)
 
 ระบบสนับสนุนการเบิกยา SmartSync เครือข่าย รพ.สต. อำเภอเมือง จังหวัดเชียงราย
 

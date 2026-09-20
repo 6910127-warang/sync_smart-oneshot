@@ -150,13 +150,28 @@
   import { firebaseConfig } from "../firebase-config.js";
   import { getAuthForApp, signOutUser, watchAuth } from "../lib/auth.js";
   import { requestDeviationSummary, requestDraftReason } from "../lib/ai-assistant.js";
+  import { logAuditEvent } from "../lib/audit-log.js";
 
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
   const auth = getAuthForApp(app);
 
-  // ผู้ช่วย AI (FT-036/BL-047) — เกณฑ์ trigger badge hardcode ไปก่อน (ยังไม่มีหน้า Admin ตั้งค่าจริง, FT-034)
-  const AI_TRIGGER_THRESHOLD_PERCENT = 25;
+  // ผู้ช่วย AI (FT-036/BL-047) — เกณฑ์ trigger badge เดิม hardcode 25 ตรงนี้ ย้ายไปอ่านจาก Firestore
+  // (systemConfiguration/ai-trigger-threshold-percent) แล้ว (เพิ่ม 20260920, FT-034) — ถ้ายังไม่มี doc นี้
+  // (เช่น admin ยังไม่เคยตั้งค่าผ่าน admin/system-settings.html) ใช้ค่า fallback 25 เดิมไว้ก่อน ไม่ throw
+  let AI_TRIGGER_THRESHOLD_PERCENT = 25;
+  (async () => {
+    try {
+      const snap = await getDoc(doc(db, "systemConfiguration", "ai-trigger-threshold-percent"));
+      if (snap.exists()) {
+        const val = Number(snap.data().currentValue);
+        if (Number.isFinite(val)) AI_TRIGGER_THRESHOLD_PERCENT = val;
+      }
+    } catch (err) {
+      console.error("โหลดเกณฑ์ trigger ผู้ช่วย AI จาก systemConfiguration ไม่สำเร็จ (ใช้ค่า fallback 25 แทน):", err);
+    }
+    updateAiTriggerBadge();
+  })();
 
   const STATUS_LABEL = {
     pending_level1: "รอการอนุมัติระดับ 1",
@@ -374,6 +389,14 @@
         level: 1, approverId: approverUid, decision: "approved", reason: null, decidedAt: new Date()
       });
     });
+    // Audit Trail ทางธุรกิจ (BL-008) — เขียนแยกหลัง transaction สำเร็จ (fire-and-forget เหมือน requisition-new.html/
+    // goods-receipt-confirm.html) แทนที่จะเขียนในทรานแซกชันเดียวกัน (เพิ่ม 20260920) — ตั้งใจไม่ทำให้ atomic กับ approvalRecords
+    // เพื่อไม่ให้ deploy ของ firestore.rules สำหรับ businessAuditLog (collection ใหม่) ผูกติดกับความสำเร็จของการอนุมัติ/ปฏิเสธ
+    // ที่เป็นฟีเจอร์หลักซึ่งทำงานอยู่แล้ว — ยอมรับ trade-off เดียวกับ log อื่นในโปรเจกต์นี้ (อาจขาดหายได้ถ้าเขียนไม่สำเร็จ ไม่ throw)
+    logAuditEvent(db, {
+      actorId: approverUid, eventType: "approve_level1", relatedEntityId: requisitionId,
+      eventDetail: `อนุมัติระดับ 1 คำขอ ${requisitionId} (${lineItemUpdates.length} รายการยา)`
+    });
   }
 
   async function rejectRequisition({ requisitionId, expectedVersion, reason, approverUid }) {
@@ -389,6 +412,11 @@
       tx.set(doc(collection(reqRef, "approvalRecords")), {
         level: 1, approverId: approverUid, decision: "rejected", reason, decidedAt: new Date()
       });
+    });
+    // Audit Trail ทางธุรกิจ (BL-008) — เขียนแยกหลัง transaction สำเร็จ (ดูเหตุผลเดียวกับ approveRequisition ด้านบน)
+    logAuditEvent(db, {
+      actorId: approverUid, eventType: "reject_level1", relatedEntityId: requisitionId,
+      eventDetail: `ปฏิเสธคำขอ ${requisitionId}: ${reason}`
     });
   }
 

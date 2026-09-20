@@ -80,7 +80,7 @@
 <script src="../assets/nav.js"></script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getFirestore, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { firebaseConfig } from "../firebase-config.js";
   import { fetchActiveUnits } from "../lib/units.js";
   import { getAuthForApp, signOutUser, watchAuth } from "../lib/auth.js";
@@ -133,8 +133,27 @@
     rowsBody.innerHTML = `<tr class="state-row"><td colspan="7">${message}</td></tr>`;
   }
 
-  // ผู้ช่วย AI (FT-036/BL-047) — เกณฑ์ trigger badge hardcode ไปก่อน (ยังไม่มีหน้า Admin ตั้งค่าจริง, FT-034)
-  const AI_TRIGGER_THRESHOLD_PERCENT = 25;
+  // ผู้ช่วย AI (FT-036/BL-047) — เกณฑ์ trigger badge เดิม hardcode 25 ตรงนี้ ย้ายไปอ่านจาก Firestore
+  // (systemConfiguration/ai-trigger-threshold-percent) แล้ว (เพิ่ม 20260920, FT-034) — cache เป็น promise เดียว
+  // ให้ loadQueue() await ก่อนคำนวณทุกครั้ง กัน race กับ watchAuth ที่อาจเรียก loadQueue ก่อน config โหลดเสร็จ
+  let aiThresholdPromise = null;
+  async function getAiThreshold() {
+    if (!aiThresholdPromise) {
+      aiThresholdPromise = (async () => {
+        try {
+          const snap = await getDoc(doc(db, "systemConfiguration", "ai-trigger-threshold-percent"));
+          if (snap.exists()) {
+            const val = Number(snap.data().currentValue);
+            if (Number.isFinite(val)) return val;
+          }
+        } catch (err) {
+          console.error("โหลดเกณฑ์ trigger ผู้ช่วย AI จาก systemConfiguration ไม่สำเร็จ (ใช้ค่า fallback 25 แทน):", err);
+        }
+        return 25; // fallback เดิมก่อนมีหน้า Admin ตั้งค่า
+      })();
+    }
+    return aiThresholdPromise;
+  }
 
   function deviationPercent(requested, suggested) {
     if (!Number.isFinite(requested) || !Number.isFinite(suggested)) return 0;
@@ -166,13 +185,14 @@
 
       // เช็คว่าคำขอไหนมีรายการยาเบี่ยงเบนเกินเกณฑ์บ้าง (FR-8.4) — ต้องอ่าน lineItems เพิ่มต่อคำขอ
       // ยอมรับ read เพิ่มขึ้นเพราะ scale เล็ก (29 หน่วย/เดือน) — ไม่ block การแสดงรายการหลักถ้าจุดนี้ผิดพลาด
+      const aiThreshold = await getAiThreshold();
       const aiExceedsMap = new Map();
       await Promise.all(rows.map(async (req) => {
         try {
           const lineSnap = await getDocs(collection(db, "requisitions", req.id, "lineItems"));
           const exceeds = lineSnap.docs.some((d) => {
             const li = d.data();
-            return deviationPercent(li.requestedQuantity, li.suggestedQuantity) > AI_TRIGGER_THRESHOLD_PERCENT;
+            return deviationPercent(li.requestedQuantity, li.suggestedQuantity) > aiThreshold;
           });
           aiExceedsMap.set(req.id, exceeds);
         } catch (err) {

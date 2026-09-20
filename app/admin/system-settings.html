@@ -1,0 +1,241 @@
+<!--
+  Role: ผู้ดูแลระบบ (admin)
+  หน้า: ตั้งค่าระบบ (FT-034) — เพิ่ม 20260920 (README.md "ขั้นต่อไป" ข้อ 9)
+  อ้างอิง: data-model.md §3.18 (System Configuration) — collection systemConfiguration, doc id = Config Key (kebab-case)
+  ย้ายเกณฑ์ trigger % ของผู้ช่วย AI (FR-8.4, เดิม hardcode AI_TRIGGER_THRESHOLD_PERCENT ในโค้ด) มาเป็นค่าที่ปรับได้จริงที่นี่แล้ว
+  (ดู ../pharmacist/approval-queue-level1.html, approval-review-level1.html ที่อ่านค่า key "ai-trigger-threshold-percent" จาก collection นี้)
+  หน้านี้เป็น generic key-value editor (ไม่ผูกกับ key ใดตายตัว) เพื่อรองรับค่าตั้งค่าอื่นในอนาคต (เช่น BL-009b) โดยไม่ต้องแก้โค้ดหน้านี้เพิ่ม —
+  รอบนี้มีแค่ "ai-trigger-threshold-percent" เป็นค่าที่โค้ดจริงใช้งานอยู่ (ค่าอื่นยังไม่เพิ่มเพราะไม่มีจุดใช้งานจริง)
+  ดูโครงสร้าง collection/field ทั้งหมดที่ ../README.md
+-->
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ตั้งค่าระบบ — SmartSync</title>
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .state-row td { text-align: center !important; color: var(--color-text-secondary); padding: var(--space-6) !important; display: table-cell !important; }
+  .topbar-right { display: flex; align-items: center; gap: var(--space-3); }
+  #loading-view { max-width: 480px; margin: var(--space-8) auto; }
+  #loading-view.hidden, #main-view.hidden { display: none; }
+  .data-table td.num input, .data-table td input.value-input { width: 160px; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">SmartSync</div>
+    <a class="nav-item" href="audit-trail.html">Audit Trail</a>
+    <a class="nav-item" href="user-accounts.html">จัดการบัญชีผู้ใช้</a>
+    <a class="nav-item active" href="system-settings.html">ตั้งค่าระบบ</a>
+  </aside>
+  <div class="drawer-scrim" onclick="closeDrawer()"></div>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger-btn" aria-label="เปิดเมนู" onclick="toggleDrawer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+        <span id="topbar-name">แอดมิน: —</span>
+      </div>
+      <div class="topbar-right">
+        <span>บทบาท: ผู้ดูแลระบบ (ข้อมูลจริงจาก Firestore)</span>
+        <button class="btn-text" id="sign-out-btn" type="button" style="display:none;">ออกจากระบบ</button>
+      </div>
+    </div>
+    <div class="content">
+
+      <div id="loading-view" class="card">
+        <p class="text-secondary">กำลังตรวจสอบสิทธิ์การใช้งาน…</p>
+      </div>
+
+      <div id="main-view" class="hidden">
+        <h1>ตั้งค่าระบบ</h1>
+        <p class="text-secondary">ปรับค่าที่มีแนวโน้มเปลี่ยนตามนโยบายได้เองโดยไม่ต้องแก้โค้ด (FR-6.10)</p>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ค่าตั้งค่า</th>
+              <th>คำอธิบาย</th>
+              <th>ค่าปัจจุบัน</th>
+              <th>แก้ไขล่าสุด</th>
+              <th>การดำเนินการ</th>
+            </tr>
+          </thead>
+          <tbody id="config-rows">
+            <tr class="state-row"><td colspan="5">กำลังโหลดข้อมูล…</td></tr>
+          </tbody>
+        </table>
+
+        <h2 style="margin-top: var(--space-8);">เพิ่มค่าตั้งค่าใหม่</h2>
+        <div class="form-grid-2col">
+          <div class="form-field">
+            <label for="new-key">Config Key (kebab-case ภาษาอังกฤษ เช่น notice-days-advance)</label>
+            <input type="text" id="new-key" placeholder="เช่น notice-days-advance">
+          </div>
+          <div class="form-field">
+            <label for="new-value">ค่าเริ่มต้น</label>
+            <input type="text" id="new-value">
+          </div>
+          <div class="form-field span-all">
+            <label for="new-description">คำอธิบาย</label>
+            <input type="text" id="new-description">
+          </div>
+        </div>
+        <p class="field-error" id="new-config-error" style="display:none;"></p>
+        <button class="btn btn-secondary" id="add-config-btn" type="button" style="width:auto;">เพิ่มค่าตั้งค่า</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="../assets/nav.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getFirestore, doc, getDoc, setDoc, collection, getDocs
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { firebaseConfig } from "../firebase-config.js";
+  import { getAuthForApp, signOutUser, watchAuth } from "../lib/auth.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuthForApp(app);
+
+  const loadingView = document.getElementById("loading-view");
+  const mainView = document.getElementById("main-view");
+  const signOutBtn = document.getElementById("sign-out-btn");
+  const topbarName = document.getElementById("topbar-name");
+  const rowsBody = document.getElementById("config-rows");
+  const newKeyInput = document.getElementById("new-key");
+  const newValueInput = document.getElementById("new-value");
+  const newDescInput = document.getElementById("new-description");
+  const newConfigError = document.getElementById("new-config-error");
+  const addConfigBtn = document.getElementById("add-config-btn");
+
+  let currentUid = null;
+
+  function withTimeout(promise, ms, timeoutMessage) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), ms))
+    ]);
+  }
+
+  function redirectToLogin() {
+    location.replace("../login.html");
+  }
+
+  function renderState(message) {
+    rowsBody.innerHTML = `<tr class="state-row"><td colspan="5">${message}</td></tr>`;
+  }
+
+  function formatThaiDateTime(timestamp) {
+    if (!timestamp) return "— (ยังไม่เคยแก้ไข)";
+    const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear() + 543;
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+  }
+
+  async function loadConfig() {
+    renderState("กำลังโหลดข้อมูล…");
+    try {
+      const snap = await withTimeout(getDocs(collection(db, "systemConfiguration")), 10000, "เชื่อมต่อ Firestore ไม่ได้ภายใน 10 วินาที");
+      if (snap.empty) {
+        renderState('ยังไม่มีค่าตั้งค่าใดๆ ในระบบ — เพิ่ม "ai-trigger-threshold-percent" (ค่าเริ่มต้น 25) ด้านล่างเพื่อให้หน้าเภสัชกรอ่านค่าจริงแทน fallback ในโค้ด');
+        return;
+      }
+      const configs = snap.docs.map((d) => ({ key: d.id, ...d.data() })).sort((a, b) => a.key.localeCompare(b.key));
+      rowsBody.innerHTML = configs.map((c) => `
+        <tr data-key="${c.key}">
+          <td data-label="ค่าตั้งค่า"><code>${c.key}</code></td>
+          <td data-label="คำอธิบาย">${c.description}</td>
+          <td data-label="ค่าปัจจุบัน"><input type="text" class="value-input" value="${c.currentValue}"></td>
+          <td data-label="แก้ไขล่าสุด">${formatThaiDateTime(c.lastUpdatedAt)}</td>
+          <td data-label="การดำเนินการ"><button class="btn-text save-btn" type="button">บันทึก</button></td>
+        </tr>`).join("");
+      rowsBody.querySelectorAll("tr[data-key]").forEach((row) => {
+        row.querySelector(".save-btn").addEventListener("click", () => saveConfig(row.dataset.key, row.querySelector(".value-input").value));
+      });
+    } catch (err) {
+      renderState(`โหลดข้อมูลไม่สำเร็จ: ${err.message} (ดู console)`);
+      console.error("loadConfig failed:", err);
+    }
+  }
+
+  async function saveConfig(key, currentValue) {
+    try {
+      const snap = await getDoc(doc(db, "systemConfiguration", key));
+      const description = snap.exists() ? snap.data().description : key;
+      await setDoc(doc(db, "systemConfiguration", key), {
+        currentValue, description, lastUpdatedBy: currentUid, lastUpdatedAt: new Date()
+      });
+      loadConfig();
+    } catch (err) {
+      alert("บันทึกไม่สำเร็จ: " + err.message);
+      console.error("saveConfig failed:", err);
+    }
+  }
+
+  addConfigBtn.addEventListener("click", async () => {
+    const key = newKeyInput.value.trim();
+    const currentValue = newValueInput.value.trim();
+    const description = newDescInput.value.trim();
+    newConfigError.style.display = "none";
+
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(key)) {
+      newConfigError.textContent = "Config Key ต้องเป็นภาษาอังกฤษตัวเล็กแบบ kebab-case เท่านั้น (เช่น notice-days-advance)";
+      newConfigError.style.display = "block";
+      return;
+    }
+    if (!description) { newConfigError.textContent = "กรุณากรอกคำอธิบาย"; newConfigError.style.display = "block"; return; }
+
+    addConfigBtn.disabled = true;
+    try {
+      const existing = await getDoc(doc(db, "systemConfiguration", key));
+      if (existing.exists()) {
+        newConfigError.textContent = `มีค่าตั้งค่า "${key}" อยู่แล้ว — แก้ไขในตารางด้านบนแทน`;
+        newConfigError.style.display = "block";
+        return;
+      }
+      await setDoc(doc(db, "systemConfiguration", key), {
+        currentValue, description, lastUpdatedBy: currentUid, lastUpdatedAt: new Date()
+      });
+      newKeyInput.value = ""; newValueInput.value = ""; newDescInput.value = "";
+      loadConfig();
+    } catch (err) {
+      newConfigError.textContent = "เพิ่มไม่สำเร็จ: " + err.message;
+      newConfigError.style.display = "block";
+      console.error("addConfig failed:", err);
+    } finally {
+      addConfigBtn.disabled = false;
+    }
+  });
+
+  signOutBtn.addEventListener("click", () => {
+    if (!confirm("ออกจากระบบ?")) return;
+    signOutUser(auth);
+  });
+
+  watchAuth(auth, db, "admin", {
+    onSignedIn: (profile) => {
+      currentUid = profile.uid;
+      loadingView.classList.add("hidden");
+      mainView.classList.remove("hidden");
+      signOutBtn.style.display = "";
+      topbarName.textContent = `แอดมิน: ${profile.displayName}`;
+      loadConfig();
+    },
+    onSignedOut: redirectToLogin,
+    onWrongRole: redirectToLogin
+  });
+</script>
+</body>
+</html>

@@ -120,6 +120,7 @@
   import { firebaseConfig } from "../firebase-config.js";
   import { generateRequisitionCode } from "../lib/requisition-code.js";
   import { getAuthForApp, signOutUser, watchAuth } from "../lib/auth.js";
+  import { logAuditEvent } from "../lib/audit-log.js";
 
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
@@ -361,6 +362,13 @@
         });
       });
       await batch.commit();
+
+      logAuditEvent(db, {
+        actorId: currentUid,
+        eventType: "create_requisition",
+        relatedEntityId: reqRef.id,
+        eventDetail: `สร้างคำขอเบิก ${requisitionCode} (${lineItems.length} รายการยา)`
+      });
 
       modal.style.display = "none";
       document.getElementById("success-code").textContent = `คำขอเบิก ${requisitionCode}`;

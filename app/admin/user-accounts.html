@@ -1,0 +1,345 @@
+<!--
+  Role: ผู้ดูแลระบบ (admin)
+  หน้า: จัดการบัญชีผู้ใช้ — เพิ่ม 20260920 (README.md "ขั้นต่อไป" ข้อ 8) แทน seed.html (dev only)
+  ขอบเขต (ยืนยันกับผู้ใช้แล้ว 20260920): สร้าง/แก้ไข/ปิดใช้งานบัญชี + ส่งอีเมลรีเซ็ตรหัสผ่านเท่านั้น
+  ไม่บังคับใช้งานจริงของ mustChangePassword/twoFactorEnabled (field เก็บไว้เฉยๆ เหมือนเดิม)
+  สร้างบัญชี Firebase Auth ผ่าน Identity Toolkit REST ตรงๆ (../lib/admin-accounts.js) แทน client SDK
+  เพื่อไม่ให้กระทบ session ของ admin ที่ login อยู่แท็บนี้ (ผู้ใช้เลือกวิธีนี้ไว้แล้ว 20260920)
+  "ปิดใช้งาน" = ตั้ง users/{uid}.active = false เท่านั้น (บัญชี Firebase Auth จริงยังอยู่ ไม่ได้ disable จริง
+  เพราะไม่มี Admin SDK ในสถาปัตยกรรมรอบนี้ — แอปบังคับ active ที่ชั้น fetchUserProfile ใน lib/auth.js อยู่แล้ว)
+  ดูโครงสร้าง collection/field ทั้งหมดที่ ../README.md
+-->
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>จัดการบัญชีผู้ใช้ — SmartSync</title>
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .state-row td { text-align: center !important; color: var(--color-text-secondary); padding: var(--space-6) !important; display: table-cell !important; }
+  .topbar-right { display: flex; align-items: center; gap: var(--space-3); }
+  #loading-view { max-width: 480px; margin: var(--space-8) auto; }
+  #loading-view.hidden, #main-view.hidden { display: none; }
+  .unit-field.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">SmartSync</div>
+    <a class="nav-item" href="audit-trail.html">Audit Trail</a>
+    <a class="nav-item active" href="user-accounts.html">จัดการบัญชีผู้ใช้</a>
+    <a class="nav-item" href="system-settings.html">ตั้งค่าระบบ</a>
+  </aside>
+  <div class="drawer-scrim" onclick="closeDrawer()"></div>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger-btn" aria-label="เปิดเมนู" onclick="toggleDrawer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+        <span id="topbar-name">แอดมิน: —</span>
+      </div>
+      <div class="topbar-right">
+        <span>บทบาท: ผู้ดูแลระบบ (ข้อมูลจริงจาก Firestore)</span>
+        <button class="btn-text" id="sign-out-btn" type="button" style="display:none;">ออกจากระบบ</button>
+      </div>
+    </div>
+    <div class="content">
+
+      <div id="loading-view" class="card">
+        <p class="text-secondary">กำลังตรวจสอบสิทธิ์การใช้งาน…</p>
+      </div>
+
+      <div id="main-view" class="hidden">
+        <h1>จัดการบัญชีผู้ใช้</h1>
+        <p class="text-secondary">สร้างบัญชีใหม่ แก้ไขบทบาท/หน่วยงาน ปิด-เปิดใช้งาน หรือส่งอีเมลรีเซ็ตรหัสผ่าน</p>
+
+        <p style="margin-bottom: var(--space-4);">
+          <button class="btn btn-primary" id="new-account-btn" type="button" style="width:auto;">+ สร้างบัญชีใหม่</button>
+          <button class="btn btn-secondary" id="refresh-btn" type="button" style="width:auto;">รีเฟรช</button>
+        </p>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ชื่อ</th>
+              <th>อีเมล</th>
+              <th>บทบาท</th>
+              <th>หน่วยงาน</th>
+              <th>สถานะ</th>
+              <th>การดำเนินการ</th>
+            </tr>
+          </thead>
+          <tbody id="user-rows">
+            <tr class="state-row"><td colspan="6">กำลังโหลดข้อมูล…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="account-modal" style="display:none;">
+  <div class="modal" style="max-width:560px;">
+    <h2 id="account-modal-title">สร้างบัญชีใหม่</h2>
+    <div class="form-field">
+      <label for="acct-display-name">ชื่อที่แสดง</label>
+      <input type="text" id="acct-display-name">
+    </div>
+    <div class="form-field">
+      <label for="acct-email">อีเมล</label>
+      <input type="email" id="acct-email" autocomplete="off">
+    </div>
+    <div class="form-field">
+      <label for="acct-role">บทบาท</label>
+      <select id="acct-role">
+        <option value="staff_hph">เจ้าหน้าที่ รพ.สต.</option>
+        <option value="pharmacist">เภสัชกร</option>
+        <option value="executive">ผู้บริหาร</option>
+        <option value="admin">ผู้ดูแลระบบ</option>
+      </select>
+    </div>
+    <div class="form-field unit-field" id="acct-unit-field">
+      <label for="acct-unit">หน่วยงาน (จำเป็นสำหรับเจ้าหน้าที่ รพ.สต.)</label>
+      <select id="acct-unit"><option value="">— เลือกหน่วยงาน —</option></select>
+    </div>
+    <p class="field-error" id="account-error" style="display:none;"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="account-cancel-btn" type="button">ยกเลิก</button>
+      <button class="btn btn-primary" id="account-save-btn" type="button">บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="new-password-modal" style="display:none;">
+  <div class="modal">
+    <h2>สร้างบัญชีสำเร็จ</h2>
+    <p>รหัสผ่านชั่วคราวของบัญชีนี้ (แสดงครั้งนี้ครั้งเดียว — กรุณาแจ้งผู้ใช้งานทันที):</p>
+    <p><code id="new-password-text" style="font-size:1.2em;"></code></p>
+    <p class="text-secondary" style="font-size: var(--font-size-caption);">รอบนี้ยังไม่บังคับให้เปลี่ยนรหัสผ่านตอน login ครั้งแรกอัตโนมัติ — กรุณาแจ้งผู้ใช้งานให้เปลี่ยนรหัสผ่านเอง</p>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="new-password-close-btn" type="button">ปิด</button>
+    </div>
+  </div>
+</div>
+
+<script src="../assets/nav.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getFirestore, doc, setDoc, updateDoc, collection, getDocs
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { firebaseConfig } from "../firebase-config.js";
+  import { getAuthForApp, signOutUser, watchAuth } from "../lib/auth.js";
+  import { fetchActiveUnits } from "../lib/units.js";
+  import { createAuthAccount, sendPasswordResetEmail, generateTempPassword } from "../lib/admin-accounts.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuthForApp(app);
+
+  const ROLE_LABEL = { staff_hph: "เจ้าหน้าที่ รพ.สต.", pharmacist: "เภสัชกร", executive: "ผู้บริหาร", admin: "ผู้ดูแลระบบ" };
+
+  const loadingView = document.getElementById("loading-view");
+  const mainView = document.getElementById("main-view");
+  const signOutBtn = document.getElementById("sign-out-btn");
+  const topbarName = document.getElementById("topbar-name");
+  const rowsBody = document.getElementById("user-rows");
+  const refreshBtn = document.getElementById("refresh-btn");
+  const newAccountBtn = document.getElementById("new-account-btn");
+  const accountModal = document.getElementById("account-modal");
+  const accountModalTitle = document.getElementById("account-modal-title");
+  const nameInput = document.getElementById("acct-display-name");
+  const emailInput = document.getElementById("acct-email");
+  const roleSelect = document.getElementById("acct-role");
+  const unitField = document.getElementById("acct-unit-field");
+  const unitSelect = document.getElementById("acct-unit");
+  const accountError = document.getElementById("account-error");
+  const saveBtn = document.getElementById("account-save-btn");
+
+  let unitsLoaded = false;
+  let editingUid = null; // null = สร้างใหม่, มีค่า = แก้ไขบัญชีเดิม (ไม่แก้อีเมล/รหัสผ่านผ่านฟอร์มนี้)
+
+  function withTimeout(promise, ms, timeoutMessage) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), ms))
+    ]);
+  }
+
+  function redirectToLogin() {
+    location.replace("../login.html");
+  }
+
+  function renderState(message) {
+    rowsBody.innerHTML = `<tr class="state-row"><td colspan="6">${message}</td></tr>`;
+  }
+
+  async function ensureUnitsLoaded() {
+    if (unitsLoaded) return;
+    const units = await fetchActiveUnits(db);
+    unitSelect.innerHTML = `<option value="">— เลือกหน่วยงาน —</option>` +
+      units.map((u) => `<option value="${u.id}">${u.name}</option>`).join("");
+    unitsLoaded = true;
+  }
+
+  function toggleUnitField() {
+    unitField.classList.toggle("hidden", roleSelect.value !== "staff_hph");
+  }
+
+  async function loadUsers() {
+    renderState("กำลังโหลดข้อมูล…");
+    try {
+      const [userSnap, units] = await Promise.all([
+        withTimeout(getDocs(collection(db, "users")), 10000, "เชื่อมต่อ Firestore ไม่ได้ภายใน 10 วินาที"),
+        fetchActiveUnits(db)
+      ]);
+      const unitNameMap = new Map(units.map((u) => [u.id, u.name]));
+
+      if (userSnap.empty) { renderState("ยังไม่มีบัญชีผู้ใช้ในระบบ"); return; }
+
+      const users = userSnap.docs.map((d) => ({ uid: d.id, ...d.data() }))
+        .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || "", "th"));
+
+      rowsBody.innerHTML = users.map((u) => `
+        <tr data-uid="${u.uid}">
+          <td data-label="ชื่อ">${u.displayName}</td>
+          <td data-label="อีเมล">${u.email}</td>
+          <td data-label="บทบาท">${ROLE_LABEL[u.role] || u.role}</td>
+          <td data-label="หน่วยงาน">${u.unitId ? (unitNameMap.get(u.unitId) || u.unitId) : "—"}</td>
+          <td data-label="สถานะ">${u.active ? '<span class="badge badge-success">ใช้งานอยู่</span>' : '<span class="badge badge-danger">ปิดใช้งาน</span>'}</td>
+          <td data-label="การดำเนินการ">
+            <button class="btn-text edit-btn" type="button">แก้ไข</button> ·
+            <button class="btn-text toggle-active-btn" type="button">${u.active ? "ปิดใช้งาน" : "เปิดใช้งาน"}</button> ·
+            <button class="btn-text reset-pw-btn" type="button">ส่งอีเมลรีเซ็ตรหัสผ่าน</button>
+          </td>
+        </tr>`).join("");
+
+      rowsBody.querySelectorAll("tr[data-uid]").forEach((row) => {
+        const uid = row.dataset.uid;
+        const u = users.find((x) => x.uid === uid);
+        row.querySelector(".edit-btn").addEventListener("click", () => openEditModal(u));
+        row.querySelector(".toggle-active-btn").addEventListener("click", () => toggleActive(u));
+        row.querySelector(".reset-pw-btn").addEventListener("click", () => resetPassword(u));
+      });
+    } catch (err) {
+      renderState(`โหลดข้อมูลไม่สำเร็จ: ${err.message} (ดู console)`);
+      console.error("loadUsers failed:", err);
+    }
+  }
+
+  async function toggleActive(u) {
+    const nextActive = !u.active;
+    if (!confirm(`ยืนยัน${nextActive ? "เปิด" : "ปิด"}ใช้งานบัญชี ${u.displayName}?`)) return;
+    try {
+      await updateDoc(doc(db, "users", u.uid), { active: nextActive });
+      loadUsers();
+    } catch (err) {
+      alert("เปลี่ยนสถานะไม่สำเร็จ: " + err.message);
+      console.error("toggleActive failed:", err);
+    }
+  }
+
+  async function resetPassword(u) {
+    if (!confirm(`ส่งอีเมลรีเซ็ตรหัสผ่านไปที่ ${u.email}?`)) return;
+    try {
+      await sendPasswordResetEmail(firebaseConfig.apiKey, u.email);
+      alert("ส่งอีเมลรีเซ็ตรหัสผ่านแล้ว");
+    } catch (err) {
+      alert("ส่งอีเมลไม่สำเร็จ: " + err.message);
+      console.error("resetPassword failed:", err);
+    }
+  }
+
+  async function openNewModal() {
+    editingUid = null;
+    accountModalTitle.textContent = "สร้างบัญชีใหม่";
+    nameInput.value = ""; emailInput.value = ""; roleSelect.value = "staff_hph"; unitSelect.value = "";
+    emailInput.disabled = false;
+    accountError.style.display = "none";
+    await ensureUnitsLoaded();
+    toggleUnitField();
+    accountModal.style.display = "flex";
+  }
+
+  async function openEditModal(u) {
+    editingUid = u.uid;
+    accountModalTitle.textContent = `แก้ไขบัญชี — ${u.displayName}`;
+    nameInput.value = u.displayName; emailInput.value = u.email; roleSelect.value = u.role;
+    emailInput.disabled = true; // เปลี่ยนอีเมลไม่ได้จากฟอร์มนี้ (ผูกกับ Firebase Auth ของบัญชีเดิม)
+    accountError.style.display = "none";
+    await ensureUnitsLoaded();
+    unitSelect.value = u.unitId || "";
+    toggleUnitField();
+    accountModal.style.display = "flex";
+  }
+
+  roleSelect.addEventListener("change", toggleUnitField);
+  document.getElementById("account-cancel-btn").addEventListener("click", () => { accountModal.style.display = "none"; });
+  newAccountBtn.addEventListener("click", openNewModal);
+
+  saveBtn.addEventListener("click", async () => {
+    const displayName = nameInput.value.trim();
+    const email = emailInput.value.trim();
+    const role = roleSelect.value;
+    const unitId = role === "staff_hph" ? (unitSelect.value || null) : null;
+    accountError.style.display = "none";
+
+    if (!displayName) { accountError.textContent = "กรุณากรอกชื่อที่แสดง"; accountError.style.display = "block"; return; }
+    if (role === "staff_hph" && !unitId) { accountError.textContent = "กรุณาเลือกหน่วยงานสำหรับเจ้าหน้าที่ รพ.สต."; accountError.style.display = "block"; return; }
+
+    saveBtn.disabled = true;
+    try {
+      if (editingUid) {
+        await updateDoc(doc(db, "users", editingUid), { displayName, role, unitId });
+        accountModal.style.display = "none";
+        loadUsers();
+      } else {
+        if (!email) { accountError.textContent = "กรุณากรอกอีเมล"; accountError.style.display = "block"; saveBtn.disabled = false; return; }
+        const tempPassword = generateTempPassword();
+        const uid = await createAuthAccount(firebaseConfig.apiKey, email, tempPassword);
+        await setDoc(doc(db, "users", uid), {
+          displayName, role, unitId, email, active: true,
+          mustChangePassword: true, twoFactorEnabled: role === "pharmacist"
+        });
+        accountModal.style.display = "none";
+        document.getElementById("new-password-text").textContent = tempPassword;
+        document.getElementById("new-password-modal").style.display = "flex";
+        loadUsers();
+      }
+    } catch (err) {
+      accountError.textContent = "บันทึกไม่สำเร็จ: " + err.message;
+      accountError.style.display = "block";
+      console.error("save account failed:", err);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  document.getElementById("new-password-close-btn").addEventListener("click", () => {
+    document.getElementById("new-password-modal").style.display = "none";
+  });
+
+  signOutBtn.addEventListener("click", () => {
+    if (!confirm("ออกจากระบบ?")) return;
+    signOutUser(auth);
+  });
+  refreshBtn.addEventListener("click", loadUsers);
+
+  watchAuth(auth, db, "admin", {
+    onSignedIn: (profile) => {
+      loadingView.classList.add("hidden");
+      mainView.classList.remove("hidden");
+      signOutBtn.style.display = "";
+      topbarName.textContent = `แอดมิน: ${profile.displayName}`;
+      loadUsers();
+    },
+    onSignedOut: redirectToLogin,
+    onWrongRole: redirectToLogin
+  });
+</script>
+</body>
+</html>

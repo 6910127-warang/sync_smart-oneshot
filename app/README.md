@@ -10,6 +10,12 @@
 - **Firebase Authentication (email/password) จริง** ทั้งสอง role ข้างต้น (เพิ่ม 20260907, BL-024)
 - **หน้า Login กลางจุดเดียว** (`login.html`, เพิ่ม 20260908) — login แล้ว redirect ไปหน้าแรกของ role อัตโนมัติ แทนฟอร์ม login ที่เคยฝังซ้ำอยู่ใน 4 หน้าจอข้างต้น
 - **ผู้ช่วย AI สำหรับเภสัชกรผู้อนุมัติระดับ 1** (`pharmacist/approval-review-level1.html`/`approval-queue-level1.html`, `lib/ai-assistant.js`, `_worker.js`, เพิ่ม 20260915) — อ้างอิง FT-036/BL-047 พร้อมบันทึกการใช้งานลง Firestore (`aiAssistantUsageLogs`, BL-048)
+- **หน้ารายละเอียดคำขอ** (`staff-hph/requisition-detail.html`, เพิ่ม 20260920) — เชื่อม `lineItems`/`approvalRecords`/`goodsReceiptRecords` จริง แทนลิงก์ที่เคยปิดใช้งาน
+- **หน้ายืนยันรับยา** (`staff-hph/goods-receipt-confirm.html`, เพิ่ม 20260920) — เขียน `goodsReceiptRecords` จริงครั้งแรก (เดิมอ่านได้อย่างเดียว)
+- **Audit Trail ทางธุรกิจ** (`admin/audit-trail.html`, `lib/audit-log.js`, เพิ่ม 20260920, BL-008) — เขียน `businessAuditLog` จากจุดที่มีโค้ดจริงอยู่แล้วเท่านั้น (สร้างคำขอ/อนุมัติ-ปฏิเสธระดับ 1/ยืนยันรับยา)
+- **จัดการบัญชีผู้ใช้** (`admin/user-accounts.html`, `lib/admin-accounts.js`, เพิ่ม 20260920) — แทน `seed.html` (dev only) สำหรับสร้าง/แก้ไข/ปิดใช้งานบัญชีจริง
+- **ตั้งค่าระบบ** (`admin/system-settings.html`, เพิ่ม 20260920, FT-034) — ย้ายเกณฑ์ trigger % ผู้ช่วย AI จาก hardcode ในโค้ดมาเป็นค่าที่ปรับได้จริง (`systemConfiguration`)
+- บทบาท **admin มีหน้าจอจริงครั้งแรก** ในรอบนี้ (3 หน้าข้างต้น) — `login.html` เพิ่ม `ROLE_HOME.admin` แล้ว
 
 ทั้งหมดอ้างอิง [`../01-requirements/backlog.md`](../01-requirements/backlog.md)
 
@@ -143,7 +149,9 @@ Document ID: `{unitId}_{drugItemId}_{referenceMonth}` (deterministic — เข�
 
 ### `goodsReceiptRecords/{receiptId}` — รายการรับยา (Goods Receipt Record, data-model §3.10)
 
-**หน้ารายการ query collection นี้เพื่อตัดสินใจแสดง "รับแล้ว"**
+**หน้ารายการ query collection นี้เพื่อตัดสินใจแสดง "รับแล้ว"** — เขียนจริงแล้ว (เพิ่ม 20260920) โดย `staff-hph/goods-receipt-confirm.html`
+(เดิมอ่านได้อย่างเดียว) Document ID เป็น deterministic `{requisitionId}_{drugItemId}` (ไม่ใช่ auto-id) เพื่อให้ Firestore ตีความการยืนยันซ้ำ
+เป็น `update` แล้วโดน `firestore.rules` ปฏิเสธอัตโนมัติ (กันยืนยันรับยาซ้ำโดยไม่ต้องเช็ค exists() เพิ่มฝั่ง client)
 
 | Field | ชนิด | จำเป็น | หมายเหตุ |
 |---|---|---|---|
@@ -153,6 +161,40 @@ Document ID: `{unitId}_{drugItemId}_{referenceMonth}` (deterministic — เข�
 | `receivedQuantity` (จำนวนที่รับจริง) | integer | ใช่ | |
 | `confirmedBy` (ผู้ยืนยันรับ) | string (ref → `users`, uid) | ใช่ | |
 | `confirmedAt` (วันที่-เวลาที่ยืนยันรับ) | Timestamp | ใช่ | |
+
+### `businessAuditLog/{entryId}` — Audit Trail ทางธุรกิจ (data-model §3.14, เพิ่ม 20260920, BL-008)
+
+> **ขอบเขตปัจจุบัน:** บันทึกเฉพาะ `eventType` ที่มีหน้าจอจริงเขียนอยู่แล้ว 4 ค่า (`create_requisition`, `approve_level1`, `reject_level1`, `confirm_receipt`)
+> — event อื่นที่ data-model.md §3.14 ระบุไว้เชิงแนวคิด ("จ่าย"/ระดับ 2, "ขอปรึกษา"/BL-003, "แก้ไขฉุกเฉิน"/BL-025) ยังไม่มีหน้าจอจริง จึงยังไม่บันทึก —
+> เพิ่ม `eventType` ใหม่ที่นี่พร้อม `firestore.rules` ทุกครั้งที่มีหน้าจอนั้นจริง อ่านได้เฉพาะ admin (เหมือน precedent ของ `aiAssistantUsageLogs`)
+> เขียนแบบ immutable (แก้/ลบไม่ได้เลยแม้แต่ admin) — เขียนโดย `lib/audit-log.js` (fire-and-forget หลัง action หลักสำเร็จเสมอ ทุกจุด
+> รวมถึง `pharmacist/approval-review-level1.html` ที่เขียนแยกหลัง `runTransaction` ของการอนุมัติ/ปฏิเสธสำเร็จแล้ว — ตั้งใจไม่รวมเป็น
+> atomic เดียวกับ `approvalRecords` เพื่อไม่ให้การ deploy `firestore.rules` ของ collection ใหม่นี้ไปผูกติดกับความสำเร็จของฟีเจอร์
+> อนุมัติ/ปฏิเสธที่ทำงานอยู่แล้ว)
+
+| Field | ชนิด | จำเป็น | หมายเหตุ |
+|---|---|---|---|
+| `actorId` (ผู้กระทำ) | string (ref → `users`, uid) | ใช่ | ต้องตรงกับ `request.auth.uid` ของผู้เขียนเสมอ |
+| `eventType` (ประเภทเหตุการณ์) | string enum: `"create_requisition"` \| `"approve_level1"` \| `"reject_level1"` \| `"confirm_receipt"` | ใช่ | ใช้ค่าภาษาอังกฤษตาม convention เดียวกับ enum อื่นในโปรเจกต์ (ต่างจากตัวอย่างภาษาไทยใน data-model.md §3.14) |
+| `relatedEntityType` (ชนิดเอนทิตีที่เกี่ยวข้อง) | string | ใช่ | ค่าคงที่ `"requisition"` เสมอในรอบนี้ (ทุก event ที่มีอยู่ตอนนี้เกี่ยวกับคำขอเบิกทั้งหมด) |
+| `relatedEntityId` (เอนทิตี/รายการที่เกี่ยวข้อง) | string (ref → `requisitions`) | ใช่ | |
+| `eventDetail` (รายละเอียดเหตุการณ์) | string | ใช่ | ข้อความสรุปอ่านง่าย เช่น "สร้างคำขอเบิก REQ-... (3 รายการยา)" |
+| `occurredAt` (วันที่-เวลาที่เกิดเหตุการณ์) | Timestamp | ใช่ | ใช้ `new Date()` ฝั่ง client (convention เดียวกับ `approvalRecords.decidedAt`) ไม่ใช้ `serverTimestamp()` |
+
+### `systemConfiguration/{configKey}` — ค่าตั้งค่าระบบ (data-model §3.18, เพิ่ม 20260920, FT-034)
+
+> Document ID = Config Key เอง (kebab-case ภาษาอังกฤษ เช่น `ai-trigger-threshold-percent`) ไม่ใช่ auto-id — แก้ไข/สร้างจริงโดย
+> `admin/system-settings.html` (generic key-value editor ไม่ผูกกับ key ใดตายตัว) **รอบนี้มีแค่ key เดียวที่โค้ดจริงใช้งานอยู่:**
+> `ai-trigger-threshold-percent` (ย้ายมาจาก `AI_TRIGGER_THRESHOLD_PERCENT` hardcode เดิมใน `pharmacist/approval-queue-level1.html`/
+> `approval-review-level1.html`, FR-8.4) — ทั้งสองหน้าอ่านค่านี้จาก Firestore ตอนโหลดหน้า มี fallback เป็น `25` ถ้ายังไม่มี doc นี้อยู่
+> (เช่น deploy ครั้งแรกก่อน admin ตั้งค่า/ก่อนรัน `seed.html`) ไม่ throw ถ้าอ่านไม่สำเร็จ
+
+| Field | ชนิด | จำเป็น | หมายเหตุ |
+|---|---|---|---|
+| `currentValue` (ค่าปัจจุบัน) | string | ใช่ | เก็บเป็นข้อความเสมอตาม data-model.md (แม้ความหมายจริงเป็นตัวเลข) — parse เป็น number ฝั่ง client ที่ใช้งาน |
+| `description` (คำอธิบาย) | string | ใช่ | แสดงประกอบหน้าตั้งค่าของ admin |
+| `lastUpdatedBy` (ผู้แก้ไขล่าสุด) | string (ref → `users`, uid) \| null | ไม่บังคับ | `null` ถ้ายังไม่เคยแก้จากค่าเริ่มต้น (เช่น doc ที่ `seed.html` สร้างไว้) |
+| `lastUpdatedAt` (วันที่-เวลาที่แก้ไขล่าสุด) | Timestamp \| null | ไม่บังคับ | `null` คู่กับ `lastUpdatedBy` ด้านบน |
 
 ### `aiAssistantUsageLogs/{logId}` — บันทึกการใช้งานผู้ช่วย AI (เพิ่ม 20260915, implementation-only, BL-048/FR-8.7-FR-8.11)
 
@@ -172,7 +214,7 @@ Document ID: `{unitId}_{drugItemId}_{referenceMonth}` (deterministic — เข�
 
 ## Collection อื่นที่ยังไม่ต้องสร้าง (สำรอง — ใช้ตอนทำหน้าจอถัดไป)
 
-อ้างอิงจาก `06-data-model.md` §3.7, §3.9, §3.12–§3.19 (`manualForecastAdjustments`, `historicalUsageRecords`, `inventoryBalances`, `notificationEvents`, `exportFiles`, `businessAuditLog`, `systemAccessLog`, `printableRequisitionDocuments`) — ยังไม่สร้างในรอบนี้เพราะยังไม่มีหน้าจอที่ต้องใช้ ให้ออกแบบ field ตอนถึงหน้าจอที่ต้องใช้จริง (คงรูปแบบ camelCase + trace กลับ field เชิงแนวคิดเดียวกับหัวข้อบนนี้)
+อ้างอิงจาก `06-data-model.md` §3.7, §3.9, §3.12, §3.13, §3.15, §3.16, §3.17, §3.19 (`manualForecastAdjustments`, `historicalUsageRecords`, `inventoryBalances`, `notificationEvents`, `exportFiles`, `systemAccessLog`, `printableRequisitionDocuments`, และ Emergency Data Edit Record §3.15) — ยังไม่สร้างในรอบนี้เพราะยังไม่มีหน้าจอที่ต้องใช้ ให้ออกแบบ field ตอนถึงหน้าจอที่ต้องใช้จริง (คงรูปแบบ camelCase + trace กลับ field เชิงแนวคิดเดียวกับหัวข้อบนนี้) — `businessAuditLog` (§3.14) และ `systemConfiguration` (§3.18) สร้างจริงแล้ว (เพิ่ม 20260920) ดูหัวข้อด้านบน
 
 ## Firebase Authentication (BL-024, เพิ่ม 20260907; login กลาง + แก้บั๊ก cross-tab เพิ่ม 20260908)
 
@@ -185,7 +227,7 @@ Document ID: `{unitId}_{drugItemId}_{referenceMonth}` (deterministic — เข�
   - `watchAuth(auth, db, expectedRole, callbacks)` — ห่อ `onAuthStateChanged` ให้เรียก `onSignedIn(profile)`/`onSignedOut(message?)`/`onWrongRole(profile)` อัตโนมัติทุกครั้งที่สถานะ login เปลี่ยน (รวมถึงตอนโหลดหน้าครั้งแรกและตอน login/logout จากแท็บอื่น — Firebase sync สถานะข้ามแท็บให้เองอยู่แล้ว ไม่ต้องฟัง `storage` event เพิ่มเหมือนกลไกเดิม)
   - `authErrorMessage(err)` — แปล error code ของ Firebase Auth เป็นข้อความไทย
 - **สำคัญ — ไม่ sign out อัตโนมัติเมื่อ role ไม่ตรง (แก้บั๊ก 20260908):** ตอนแรก `watchAuth` เรียก `signOutUser()` ทันทีที่เจอ role ไม่ตรง แต่ Firebase Auth ใช้ persistence เดียวกันข้ามทุกแท็บของ origin เดียวกัน — ถ้าเปิดหน้า staff-hph ค้างไว้อีกแท็บระหว่างที่ login หน้าเภสัชกรถูกต้องอยู่แล้วในอีกแท็บ การ sign out อัตโนมัติในแท็บที่ role ไม่ตรงจะไปเตะแท็บที่ login ถูกต้องอยู่แล้วให้หลุดไปด้วย (วนกลับมาหน้า login ไม่จบ) ตอนนี้แก้แล้วโดยไม่ sign out อัตโนมัติ — แค่เรียก `onWrongRole`/`onSignedOut` ให้หน้าจอ redirect ไป `login.html` เฉยๆ ผู้ใช้ต้องกด "ออกจากระบบ" เองถ้าต้องการเปลี่ยนบัญชี (ปุ่มนี้โชว์เสมอเมื่อมี `auth.currentUser`)
-- แต่ละหน้าจอ (`requisition-list.html`, `requisition-new.html`, `approval-queue-level1.html`, `approval-review-level1.html`) เรียก `watchAuth(auth, db, "staff_hph" | "pharmacist", {...})` เพื่อ **guard** เท่านั้น (ไม่มีฟอร์ม login ฝังอยู่แล้ว) — ถ้าไม่ login/role ไม่ตรง/ไม่มี `unitId` จะ `location.replace("../login.html")` กลับไปที่จุดเดียว
+- แต่ละหน้าจอ (`requisition-list.html`, `requisition-new.html`, `requisition-detail.html`, `goods-receipt-confirm.html`, `approval-queue-level1.html`, `approval-review-level1.html`, `admin/audit-trail.html`, `admin/user-accounts.html`, `admin/system-settings.html`) เรียก `watchAuth(auth, db, "staff_hph" | "pharmacist" | "admin", {...})` เพื่อ **guard** เท่านั้น (ไม่มีฟอร์ม login ฝังอยู่แล้ว) — ถ้าไม่ login/role ไม่ตรง/ไม่มี `unitId` จะ `location.replace("../login.html")` กลับไปที่จุดเดียว — `watchAuth` เป็น generic อยู่แล้ว (รับ `expectedRole` เป็น string ใดก็ได้) จึงไม่ต้องแก้ `lib/auth.js` เพิ่มตอนเพิ่ม role `admin` (เพิ่ม 20260920)
 - `requisition-list.html`/`requisition-new.html`: "หน่วยของฉัน" มาจาก `profile.unitId` เสมอ (ไม่มีการเลือกหน่วยเองอีกต่อไป — เจ้าหน้าที่ รพ.สต. สังกัด 1 หน่วยเท่านั้น ตาม [ACL.md](../ACL.md))
 - `approval-queue-level1.html`/`approval-review-level1.html`: ตัวตนเภสัชกรมาจาก `profile.uid`/`profile.displayName` ตรงๆ — ใช้แยกแยะรายบุคคลจริงสำหรับกฎ "ห้ามอนุมัติซ้ำทั้ง 2 ระดับ" (BL-004)
 - `lib/units.js` (`fetchActiveUnits`) ยังใช้อยู่ — แต่เฉพาะแสดงชื่อหน่วยในตาราง (เช่น คอลัมน์ "หน่วย รพ.สต." ของ `approval-queue-level1.html`) ไม่ใช้ทำ dropdown login แล้ว
@@ -212,9 +254,13 @@ Query ของหน้า `requisition-list.html` รวม equality filter �
 - `counters`: กรองตาม `unitId` เช่นกัน (staff-hph แก้ได้เฉพาะตัวนับของหน่วยตัวเอง)
 - `requisitions`: staff-hph อ่าน/สร้างได้เฉพาะของหน่วยตัวเอง (สร้างต้องเริ่มที่ `status: "pending_level1"`, `recordVersion: 1` เท่านั้น กัน client ปลอมสถานะข้ามขั้นตอน) — เภสัชกร/ผู้บริหาร/admin อ่านได้ทั้งเครือข่าย — เภสัชกรแก้ได้เฉพาะ `status`/`recordVersion` ตอน pending_level1 เท่านั้น (ขอบเขตปัจจุบัน: เฉพาะ transition ของระดับ 1 — ต้องขยายกฎตอนทำหน้าอนุมัติระดับ 2 จริง) — **ห้ามลบจาก client เด็ดขาด**
   - `lineItems`/`approvalRecords` (subcollection): สิทธิ์อ่าน/เขียนอิงจาก `unitId`/`status` ของคำขอแม่ (อ่านผ่าน `get()`) — เภสัชกรแก้ `lineItems` ได้เฉพาะ `approvedQuantity`/`pharmacistConfirmedBalance`, สร้าง `approvalRecords` ได้เฉพาะ `level: 1` เท่านั้น (ขอบเขตปัจจุบัน) — ทั้งคู่ **ห้ามแก้/ลบหลังสร้างแล้ว**
-- `goodsReceiptRecords`: staff-hph อ่านได้เฉพาะของหน่วยตัวเอง (ตาม `receivingUnitId`), เภสัชกร/ผู้บริหาร/admin อ่านได้ทั้งเครือข่าย — **ยังไม่เปิดสิทธิ์เขียนจาก client เลย** เพราะยังไม่มีหน้าจอยืนยันรับยาจริง
+- `goodsReceiptRecords`: staff-hph อ่านได้เฉพาะของหน่วยตัวเอง (ตาม `receivingUnitId`) **และเขียน (`create`) ได้เฉพาะของหน่วยตัวเองด้วย (เพิ่ม 20260920)** เฉพาะคำขอสถานะ `dispensed` ของหน่วยตัวเองเท่านั้น — เภสัชกร/ผู้บริหาร/admin อ่านได้ทั้งเครือข่าย — **ห้ามแก้/ลบหลังสร้างแล้ว** (ใช้ deterministic doc id กันยืนยันซ้ำ ดูหัวข้อ schema ด้านบน)
 - **(เพิ่ม 20260915, BL-048)** `aiAssistantUsageLogs`: อ่านได้เฉพาะ admin, เขียน (`create`) ได้เฉพาะเภสัชกรที่เขียนบันทึกของตัวเอง (`callerId == request.auth.uid`) — **ห้ามแก้/ลบเอกสารที่มีอยู่แล้วเลยแม้แต่ admin** (immutable) — publish แล้ว 20260915 ผ่าน `firebase.cmd deploy --only firestore:rules`
+- **(เพิ่ม 20260920, BL-008)** `businessAuditLog`: อ่านได้เฉพาะ admin, เขียน (`create`) ได้เฉพาะเจ้าของเหตุการณ์เอง (`actorId == request.auth.uid`) กรองตาม `eventType` ↔ role ให้ตรงกัน (staff-hph เขียนได้แค่ `create_requisition`/`confirm_receipt`, เภสัชกรเขียนได้แค่ `approve_level1`/`reject_level1`) — **ห้ามแก้/ลบเลยแม้แต่ admin** (immutable)
+- **(เพิ่ม 20260920, FT-034)** `systemConfiguration`: อ่านได้ทุก role ที่ login แล้ว (ไม่ sensitive, หลายหน้าจอต้องอ่านค่าเดียวกัน), เขียน (`create`/`update`) ได้เฉพาะ admin — ไม่เปิดสิทธิ์ `delete` เลย (ไม่มีหน้าจอลบ กันเผลอลบ key ที่โค้ดอื่นพึ่งพาอยู่)
 - collection อื่นที่ยังไม่ได้สร้าง (ดูหัวข้อด้านบน) — ปฏิเสธทุกการเข้าถึงไว้ก่อนอย่างชัดเจน
+
+**Publish แล้ว (20260920)** กฎ 3 ข้อล่าสุด (`goodsReceiptRecords` create, `businessAuditLog`, `systemConfiguration`) ผ่าน `firebase.cmd deploy --only firestore:rules` — คอมไพล์ผ่านและ release สำเร็จ (`syncsmart-98d1e`) หน้าจอ `staff-hph/goods-receipt-confirm.html`, `admin/audit-trail.html`, `admin/user-accounts.html`, `admin/system-settings.html` ใช้งานได้จริงแล้วทั้งบน local server และ production
 
 **หมายเหตุการเปลี่ยนโค้ดที่มากับกฎชุดนี้ (สำคัญ):**
 - `requisition-new.html` เปลี่ยนจากเขียน `requisitions` doc + `lineItems` subcollection ใน `writeBatch` เดียวกัน มาเป็น `await setDoc(reqRef, ...)` ให้ commit เสร็จก่อน แล้วค่อย `writeBatch` แยกสำหรับ `lineItems` — เพราะ security rule ของ `lineItems` ต้อง `get()` อ่าน `unitId`/`status` ของคำขอแม่กลับมาเช็ค แต่ Firestore ไม่การันตีว่า `get()` ใน security rule จะเห็นงานเขียนอื่นที่อยู่ใน batch/transaction เดียวกัน (เอกสาร Firestore ระบุชัดว่า "get() might not reflect changes made by other operations within the same request") จึงต้องแยกเป็นคนละ request เพื่อให้ rule ประเมินถูกต้อง — **ผลข้างเคียงที่ยอมรับ:** ถ้า batch ของ `lineItems` fail หลัง `requisitions` doc commit ไปแล้ว จะเหลือคำขอเบิกที่ไม่มีรายการยา (orphan) ค้างไว้ — เป็น edge case ที่หายากมาก (ไม่มี backend/Cloud Function ให้ rollback อัตโนมัติในสถาปัตยกรรม static ล้วนของโปรเจกต์นี้)
@@ -289,7 +335,7 @@ npx.cmd wrangler dev --persist-to ..\.wrangler-state
 
 **ขอบเขตที่ตัดออกในรอบแรกนี้ (เทียบกับ spec 008 เต็มรูปแบบ):**
 - **ไม่มีข้อมูลประวัติย้อนหลัง 3 ปี** — collection `historicalUsageRecords` ที่ FR-8.3 ตั้งใจให้ใช้ยังไม่ถูกสร้างจริง ความสามารถ (ก) จึงสรุปจากตัวเลขของคำขอปัจจุบันเท่านั้น (ยอดขอเบิก/ยอดแนะนำ/ยอดคงเหลือ/เกณฑ์ Safety Stock ปัจจุบันจาก `safetyStockThresholds`)
-- **เกณฑ์ trigger % (FR-8.4) hardcode = 25%** เป็นค่าคงที่ `AI_TRIGGER_THRESHOLD_PERCENT` ในโค้ด (ซ้ำอยู่ทั้งใน `_worker.js` เชิงเอกสาร, `approval-review-level1.html`, และ `approval-queue-level1.html`) — ส่วน "Admin ปรับได้ผ่านหน้าตั้งค่า" รอหน้า Admin ตั้งค่าระบบจริง (FT-034) ที่ยังไม่มีโค้ด
+- ~~เกณฑ์ trigger % (FR-8.4) hardcode = 25% เป็นค่าคงที่ `AI_TRIGGER_THRESHOLD_PERCENT` ในโค้ด~~ — **ย้ายไปเป็น Config Key ที่ปรับได้จริงแล้ว 20260920 (FT-034)** ดูหัวข้อ `systemConfiguration` ใน "Firestore Schema" ด้านบน — `_worker.js` ไม่เคยใช้ค่านี้จริง (แค่กล่าวถึงเชิงเอกสาร) จึงไม่ต้องแก้ไฟล์นั้น มีแค่ 2 หน้าเภสัชกรที่อ่านค่าจริง
 - **ความสามารถ (ข) จำกัดเฉพาะฟอร์มปฏิเสธเท่านั้น** — หน้า `approval-review-level1.html` ปัจจุบันไม่มีช่องกรอกเหตุผลสำหรับกรณี "ปรับยอด" (แก้ตัวเลขในช่อง "จำนวนที่อนุมัติ" แล้วกดอนุมัติ ไม่มี UI ขอเหตุผลเลย) จึงยังไม่มีจุดให้ผูกปุ่ม AI ร่างข้อความ — เป็น gap ของ UI เดิมเอง ไม่ใช่ของฟีเจอร์นี้
 - **หมายเหตุข้อมูลจริงตอนนี้:** ฟิลด์ `requestedQuantity` ("ยอดขอเบิก") เท่ากับ `suggestedQuantity` เสมอ เพราะปุ่ม "ขอปรึกษา" (BL-003, ทางเดียวที่ทำให้สองค่านี้ต่างกันได้) ยังไม่ได้พัฒนาจริง — แปลว่า badge "เบี่ยงเบนมาก" จะแทบไม่ขึ้นเลยกับข้อมูลจริงในรอบนี้ (ถูกต้องตามสเปค ไม่ใช่บั๊ก — ปุ่มเรียกดู AI ยังกดใช้งานได้ปกติเสมอตาม FR-8.5) ทดสอบให้เห็นผลชัดเจนต้องตั้งค่า `requestedQuantity` ต่างจาก `suggestedQuantity` เองผ่าน Firebase Console
 - ~~ไม่มีการเก็บ/persist ผลลัพธ์ AI ใดๆ ลง Firestore~~ — **เข้าสู่เฟสพัฒนาแล้ว 20260915 (BL-048)** ดูหัวข้อ "บันทึกการใช้งานผู้ช่วย AI" ด้านล่าง
@@ -305,15 +351,23 @@ npx.cmd wrangler dev --persist-to ..\.wrangler-state
 - **ทดสอบด้วยตัวเอง:** login เป็นเภสัชกร → เปิดคำขอที่ `pending_level1` → กด "เรียกดูผู้ช่วย AI" หรือ "ให้ AI ช่วยร่างข้อความเหตุผล" → เปิด Firebase Console ด้วยบัญชี admin ควรเห็นเอกสารใหม่ปรากฏใน `aiAssistantUsageLogs` ทันที — ถ้า login เป็น role อื่น (staff_hph) หรือไม่ login เลย แล้วลองอ่าน collection นี้ผ่าน client SDK ต้องถูกปฏิเสธ (`permission-denied`)
 - **ยืนยันแล้วจริง (20260915)** ผ่าน `wrangler dev` (`--persist-to` ต้องชี้ออกนอก `app/` เสมอ ไม่งั้นจะเจอบั๊ก reload วนไม่จบที่บันทึกไว้ด้านบน) + login เป็น `pharmacist-a@smartsync.test` จริง — เรียกทั้งความสามารถ (ก) และ (ข) สำเร็จ (`POST /api/ai-assist` → 200 OK ทั้งคู่, ไม่มี console error จากการเขียน log) และผู้ใช้ยืนยันด้วยตาเองผ่าน Firebase Console แล้วว่าเห็นเอกสารทั้ง 2 รายการจริงใน `aiAssistantUsageLogs`
 
+## จัดการบัญชีผู้ใช้ (item #8, เพิ่ม 20260920)
+
+`admin/user-accounts.html` แทน `seed.html` (dev only) สำหรับสร้าง/แก้ไข/ปิดใช้งานบัญชีจริงแล้ว — ขอบเขตยืนยันกับผู้ใช้แล้ว 20260920:
+
+- **สร้างบัญชี Firebase Auth ผ่าน Identity Toolkit REST ตรงๆ** (`lib/admin-accounts.js`, `accounts:signUp` ด้วย public `apiKey` เดิมใน `firebase-config.js`) แทน client SDK's `createUserWithEmailAndPassword` — เหตุผล: ถ้าเรียกตรงบน auth instance เดียวกับที่ admin login อยู่ จะ sign in เป็นบัญชีใหม่ทันทีและเตะ admin ออกจาก session ตัวเอง วิธีนี้เป็นแค่ `fetch()` ธรรมดา ไม่ผ่าน `firebase.auth()` ของแท็บนี้เลย จึงไม่กระทบ session admin
+- รหัสผ่านเริ่มต้นสุ่มอัตโนมัติ (`generateTempPassword()`) แสดงให้ admin เห็นครั้งเดียวตอนสร้างบัญชีสำเร็จ — ต้องแจ้งผู้ใช้งานเอง (ไม่มีอีเมลอัตโนมัติตอนสร้างบัญชี)
+- **"ปิดใช้งาน" = ตั้ง `users/{uid}.active = false` เท่านั้น** — บัญชี Firebase Auth จริงยังคงอยู่ ไม่ได้ถูก disable จริงระดับ Firebase (ต้องมี Admin SDK ถึงทำได้ ซึ่งไม่ได้เลือกใช้ในสถาปัตยกรรมรอบนี้) แอปบังคับที่ชั้น `fetchUserProfile()` (`lib/auth.js`) อยู่แล้วเหมือนเดิม เพียงพอกันไม่ให้บัญชีที่ปิดใช้งานเข้าแอปได้จริง
+- **"ส่งอีเมลรีเซ็ตรหัสผ่าน"** ใช้ Identity Toolkit `accounts:sendOobCode` (`requestType: "PASSWORD_RESET"`) — เป็นทางเดียวที่ admin ช่วย "รีเซ็ตรหัสผ่าน" ของบัญชีอื่นได้โดยไม่มี Admin SDK (ตั้งรหัสผ่านใหม่ให้บัญชีอื่นโดยตรงทำไม่ได้ด้วยวิธีนี้)
+- **ไม่บังคับใช้งานจริงของ `mustChangePassword`/`twoFactorEnabled`** (ผู้ใช้ยืนยันขอบเขตนี้แล้ว 20260920) — สร้างบัญชีใหม่ยังตั้ง `mustChangePassword: true` เสมอ (เหมือน `seed.html` เดิม) แต่ไม่มี logic บังคับเปลี่ยนรหัสผ่านตอน login ครั้งแรก และ 2FA/OTP จริงยังไม่มีเลย (ต้องพึ่ง provider ภายนอกที่ยังไม่เลือกใช้) — นับเป็นงานแยกต่างหากถ้าต้องการในอนาคต ไม่ใช่ส่วนหนึ่งของรอบนี้
+
 ## ขั้นต่อไป (ยังไม่ทำในรอบนี้ — รอคำสั่งเจาะจง)
 
-1. ทำหน้ารายละเอียดคำขอ (`requisition-detail.html`) เชื่อม `lineItems` subcollection จริง แทนลิงก์ที่ปิดใช้งานไว้ใน `requisition-list.html`
-2. ทำหน้าอนุมัติระดับ 2 (BL-004 — ระดับ 1 เสร็จแล้ว 20260907 ที่ `pharmacist/approval-review-level1.html`) ต้องเพิ่มการเช็ค `approvalRecords where level==1` เทียบ `approverId` กับ uid ของเภสัชกรระดับ 2 ที่ login อยู่ (กฎห้ามคนเดียวกันอนุมัติซ้ำ) **และขยาย `firestore.rules` ให้รองรับ transition/approvalRecords ระดับ 2 ด้วย (ตอนนี้กฎเปิดไว้แค่ระดับ 1 — ต้อง `firebase.cmd deploy --only firestore:rules` ใหม่หลังแก้)** และทำหน้าส่งออก Excel + แจ้งเตือนอีเมล/LINE OA (BL-020) ต่อจากนั้น
-3. ทำ Epic 2 (พยากรณ์สต็อก, BL-010/011/012) เพื่อให้ `safetyStockThresholds` มีค่าจริงแทนข้อมูลตัวอย่างจาก `seed.html` — เมื่อทำแล้วจึงค่อยเพิ่ม auto-discrepancy warning เต็มรูปแบบ (BL-032) และช่องกรอกจำนวนคาดการณ์เคสใหม่ (BL-015, FT-013) ในหน้าอนุมัติระดับ 1 ที่ตอนนี้ตัดออกไปก่อน
-4. ทำหน้าสร้างคำขอเบิกฉุกเฉิน (BL-009, นอกรอบเดือน) — แยกจาก `requisition-new.html` ที่ทำเฉพาะคำขอปกติ
-5. ทำปุ่ม "ขอปรึกษา" จริง (BL-003) — ต้องรอ BL-014 (ช่องทางแจ้งเตือน LINE OA)
-6. ทำหน้า audit-trail และเขียน `businessAuditLog` จริง (BL-008) — ยังไม่มีหน้าจอใช้งานจึงยังไม่สร้าง collection นี้ (`firestore.rules` ปฏิเสธไว้ก่อนแล้ว ต้องเพิ่มกฎตอนสร้างจริง)
-7. ทำหน้ายืนยันรับยาจริง เขียน `goodsReceiptRecords` (ตอนนี้อ่านได้อย่างเดียว เขียนถูกปิดไว้ใน `firestore.rules` เพราะยังไม่มีหน้าจอ)
-8. ทำหน้า admin สร้าง/จัดการบัญชีผู้ใช้จริง แทน `seed.html` (dev only) — รวมถึงบังคับใช้งานจริงของ `mustChangePassword`/`twoFactorEnabled`
-9. ทำหน้า Admin ตั้งค่าระบบจริง (FT-034) แล้วย้ายเกณฑ์ trigger % ของผู้ช่วย AI (FR-8.4) จาก `AI_TRIGGER_THRESHOLD_PERCENT` hardcode ในโค้ด ไปเป็น Config Key ที่ปรับได้จริงใน `systemConfiguration`
-10. ถ้าต้องการให้ความสามารถ (ก) ของผู้ช่วย AI อ้างอิงประวัติย้อนหลังจริง ต้องทำ Epic 2/data migration ให้ `historicalUsageRecords` มีข้อมูลจริงก่อน (ตอนนี้ยังไม่ถูกสร้าง — ดูหัวข้อ "ผู้ช่วย AI" ด้านบน)
+1. ทำหน้าอนุมัติระดับ 2 (BL-004 — ระดับ 1 เสร็จแล้ว 20260907 ที่ `pharmacist/approval-review-level1.html`) ต้องเพิ่มการเช็ค `approvalRecords where level==1` เทียบ `approverId` กับ uid ของเภสัชกรระดับ 2 ที่ login อยู่ (กฎห้ามคนเดียวกันอนุมัติซ้ำ) **และขยาย `firestore.rules` ให้รองรับ transition/approvalRecords ระดับ 2 ด้วย (ตอนนี้กฎเปิดไว้แค่ระดับ 1 — ต้อง `firebase.cmd deploy --only firestore:rules` ใหม่หลังแก้)** และทำหน้าส่งออก Excel + แจ้งเตือนอีเมล/LINE OA (BL-020) ต่อจากนั้น
+2. ทำ Epic 2 (พยากรณ์สต็อก, BL-010/011/012) เพื่อให้ `safetyStockThresholds` มีค่าจริงแทนข้อมูลตัวอย่างจาก `seed.html` — เมื่อทำแล้วจึงค่อยเพิ่ม auto-discrepancy warning เต็มรูปแบบ (BL-032) และช่องกรอกจำนวนคาดการณ์เคสใหม่ (BL-015, FT-013) ในหน้าอนุมัติระดับ 1 ที่ตอนนี้ตัดออกไปก่อน
+3. ทำหน้าสร้างคำขอเบิกฉุกเฉิน (BL-009, นอกรอบเดือน) — แยกจาก `requisition-new.html` ที่ทำเฉพาะคำขอปกติ
+4. ทำปุ่ม "ขอปรึกษา" จริง (BL-003) — ต้องรอ BL-014 (ช่องทางแจ้งเตือน LINE OA)
+5. ถ้าต้องการให้ความสามารถ (ก) ของผู้ช่วย AI อ้างอิงประวัติย้อนหลังจริง ต้องทำ Epic 2/data migration ให้ `historicalUsageRecords` มีข้อมูลจริงก่อน (ตอนนี้ยังไม่ถูกสร้าง — ดูหัวข้อ "ผู้ช่วย AI" ด้านบน)
+6. ถ้าต้องการบังคับใช้งานจริงของ `mustChangePassword`/2FA (twoFactorEnabled) — ยังไม่ได้รับคำสั่งเข้าสู่เฟสพัฒนา (ผู้ใช้ตัดกลับออกจากขอบเขตข้อ #8 ไปแล้ว 20260920) ต้องเลือก OTP/SMS provider ก่อนเริ่มได้
+7. ถ้าต้องการให้ `businessAuditLog` ครอบคลุม event อื่นตาม data-model.md §3.14 เต็มรูปแบบ (จ่ายผ่านระดับ 2, ขอปรึกษา, แก้ไขฉุกเฉิน) — ต้องรอหน้าจอของ event นั้นๆ เกิดขึ้นจริงก่อน (ดูหัวข้อ `businessAuditLog` ใน "Firestore Schema" ด้านบน)
+8. ทำหน้า Admin จัดการ `emergency data edit record` จริง (BL-025) — ยังไม่มีโค้ด (ต่างจาก item #8 ที่ทำแล้ว ซึ่งเป็นแค่จัดการบัญชีผู้ใช้ ไม่ใช่แก้ไขข้อมูลธุรกิจกรณีฉุกเฉิน)

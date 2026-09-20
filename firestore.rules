@@ -1,10 +1,11 @@
 rules_version = '2';
 
-// SmartSync — Firestore Security Rules กรองตาม role/unitId (อัปเดต 20260908, แทนกฎเดิม "แค่ต้อง login")
+// SmartSync — Firestore Security Rules กรองตาม role/unitId (อัปเดต 20260920, เพิ่มกฎยืนยันรับยา/audit-trail/ตั้งค่าระบบ)
 // อ้างอิงโครงสร้าง collection/field ทั้งหมดจาก app/README.md — แก้ไฟล์นั้นก่อนเสมอถ้า schema เปลี่ยน แล้วมาปรับที่นี่ตาม
 //
-// ขอบเขต: ครอบคลุมเฉพาะ collection/การกระทำที่มีหน้าจอจริงใช้งานอยู่ตอนนี้ (BL-001/002/004/005/024/047/048, ระดับอนุมัติ 1 เท่านั้น)
-// ส่วนที่ยังไม่มีหน้าจอ (อนุมัติระดับ 2, ส่งออก Excel, audit-trail, ยืนยันรับยา, Epic 2 พยากรณ์สต็อก) จงใจไม่เปิดสิทธิ์เขียนไว้ล่วงหน้า
+// ขอบเขต: ครอบคลุมเฉพาะ collection/การกระทำที่มีหน้าจอจริงใช้งานอยู่ตอนนี้
+// (BL-001/002/004/005/008/024/034/047/048, ระดับอนุมัติ 1 เท่านั้น, การรับยา, audit-trail และตั้งค่าระบบขอบเขตเริ่มต้น)
+// ส่วนที่ยังไม่มีหน้าจอ (อนุมัติระดับ 2, ส่งออก Excel, คำขอฉุกเฉิน, Epic 2 พยากรณ์สต็อก) จงใจไม่เปิดสิทธิ์เขียนไว้ล่วงหน้า
 // — ต้องขยายกฎที่นี่พร้อมกับตอนสร้างหน้าจอนั้นจริง (ดู app/README.md หัวข้อ "ขั้นต่อไป")
 
 service cloud.firestore {
@@ -172,11 +173,50 @@ service cloud.firestore {
     // ---------- goodsReceiptRecords/{receiptId} — data-model §3.10 ----------
     // อ่านได้: staff-hph เฉพาะของหน่วยตัวเอง (ตรงกับ query where receivingUnitId==... ที่ requisition-list.html ใช้),
     // เภสัชกร/ผู้บริหาร/แอดมินอ่านได้ทั้งเครือข่าย
-    // เขียน: ยังไม่มีหน้าจอยืนยันรับยาจริง (รอคำสั่งเข้าสู่เฟสพัฒนา) จึงยังไม่เปิดสิทธิ์เขียนจาก client เลย
+    // เขียน (เพิ่ม 20260920): staff_hph ยืนยันรับยาของหน่วยตัวเองได้ เฉพาะคำขอสถานะ "dispensed" ของหน่วยตัวเองเท่านั้น
+    // ดู staff-hph/goods-receipt-confirm.html — ใช้ deterministic doc id "{requisitionId}_{drugItemId}" ฝั่ง client
+    // เพื่อให้ Firestore ตีความการยืนยันซ้ำเป็น "update" แทน "create" แล้วโดน allow update: if false ปฏิเสธอัตโนมัติ
     match /goodsReceiptRecords/{receiptId} {
       allow read: if isAdmin() || isExecutive() || isPharmacist()
         || (isStaffHph() && resource.data.receivingUnitId == myUnitId());
-      allow write: if false;
+      allow create: if isStaffHph()
+        && request.resource.data.receivingUnitId == myUnitId()
+        && requisitionData(request.resource.data.requisitionId).unitId == myUnitId()
+        && requisitionData(request.resource.data.requisitionId).status == 'dispensed'
+        && request.resource.data.confirmedBy == request.auth.uid
+        && request.resource.data.drugItemId is string
+        && request.resource.data.receivedQuantity is int && request.resource.data.receivedQuantity >= 0;
+      allow update, delete: if false;
+    }
+
+    // ---------- businessAuditLog/{entryId} — data-model §3.14, BL-008 (เพิ่ม 20260920) ----------
+    // อ่านได้เฉพาะ admin (เหมือน precedent ของ aiAssistantUsageLogs) — เขียนได้เฉพาะเจ้าของเหตุการณ์เอง (actorId ต้องตรงกับ uid ที่ login)
+    // ขอบเขตปัจจุบัน: มีแค่ 4 eventType ที่มีหน้าจอจริงเขียนอยู่ (สร้างคำขอ/อนุมัติ-ปฏิเสธระดับ1/ยืนยันรับยา) — เพิ่ม type ใหม่ที่นี่พร้อมหน้าจอที่เขียนจริง
+    // เป็น audit log แก้ไข/ลบไม่ได้เลยแม้แต่ admin (immutable ตามคำอธิบาย data-model.md §3.14 "แก้ไขไม่ได้")
+    match /businessAuditLog/{entryId} {
+      allow get, list: if isAdmin();
+      allow create: if isActiveUser()
+        && request.resource.data.actorId == request.auth.uid
+        && request.resource.data.relatedEntityType == 'requisition'
+        && request.resource.data.relatedEntityId is string
+        && request.resource.data.eventDetail is string
+        && (
+             (request.resource.data.eventType in ['create_requisition', 'confirm_receipt'] && isStaffHph())
+          || (request.resource.data.eventType in ['approve_level1', 'reject_level1'] && isPharmacist())
+        );
+      allow update, delete: if false;
+    }
+
+    // ---------- systemConfiguration/{configKey} — data-model §3.18, FT-034 (เพิ่ม 20260920) ----------
+    // ข้อมูลอ้างอิงที่ทุก role ที่ login แล้วอ่านได้ (เช่น หน้าเภสัชกรอ่านเกณฑ์ trigger % ผู้ช่วย AI) — เขียนได้เฉพาะ admin
+    // doc id = Config Key เอง (kebab-case, ดู admin/system-settings.html) ไม่มีหน้าจอลบ จึงไม่เปิดสิทธิ์ delete ไว้เลย
+    match /systemConfiguration/{configKey} {
+      allow read: if isActiveUser();
+      allow create, update: if isAdmin()
+        && request.resource.data.currentValue is string
+        && request.resource.data.description is string
+        && request.resource.data.lastUpdatedBy == request.auth.uid;
+      allow delete: if false;
     }
 
     // ---------- aiAssistantUsageLogs/{logId} — implementation-only, บันทึกการใช้งานผู้ช่วย AI (BL-048/FR-8.7-FR-8.11) ----------
@@ -196,7 +236,7 @@ service cloud.firestore {
 
     // ---------- collection อื่นที่ยังไม่ได้สร้าง/ยังไม่มีหน้าจอใช้งาน ----------
     // (manualForecastAdjustments, historicalUsageRecords, inventoryBalances, notificationEvents,
-    //  exportFiles, businessAuditLog, systemAccessLog, printableRequisitionDocuments)
+    //  exportFiles, systemAccessLog, printableRequisitionDocuments)
     // ปฏิเสธทุกการเข้าถึงไว้ก่อนอย่างชัดเจน — เพิ่มกฎเฉพาะตอนสร้างหน้าจอที่ต้องใช้จริง
     match /{document=**} {
       allow read, write: if false;
